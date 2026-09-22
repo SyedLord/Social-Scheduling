@@ -1,0 +1,7 @@
+{
+  "name": "OmniPost",
+  "description": "Production multi-tenant social media scheduling & automation SaaS with multi-platform OAuth 2.0, visual queue calendar, post previews, and background dispatch engine.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
+

@@ -1,0 +1,41 @@
+{
+  "users": [
+    {
+      "id": "usr_admin_master",
+      "email": "admin@omnipost.io",
+      "name": "Admin",
+      "role": "admin",
+      "password": "admin123",
+      "avatar_url": "https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=150&auto=format&fit=crop&q=80",
+      "created_at": "2026-09-22T05:30:00.000Z"
+    },
+    {
+      "id": "usr_default_master",
+      "email": "user@omnipost.io",
+      "name": "User",
+      "role": "user",
+      "password": "user123",
+      "avatar_url": "https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80",
+      "created_at": "2026-09-22T05:30:00.000Z"
+    }
+  ],
+  "workspaces": [],
+  "license_keys": [
+    {
+      "id": "lic_starter_ready",
+      "key": "OMNI-KEY-1001-ALPHA",
+      "label": "Starter Pass (3 Workspaces - 30 Days)",
+      "max_workspaces": 3,
+      "validity_days": 30,
+      "created_at": "2026-09-22T05:30:00.000Z",
+      "is_redeemed": false,
+      "is_revoked": false,
+      "status": "available"
+    }
+  ],
+  "workspace_members": [],
+  "workspace_accounts": [],
+  "posts": [],
+  "post_analytics": [],
+  "dispatch_logs": []
+}
