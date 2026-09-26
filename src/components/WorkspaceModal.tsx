@@ -1,11 +1,10 @@
 import React, { useState } from 'react';
-import { X, Building2, Check, Sparkles, AlertTriangle, Key } from 'lucide-react';
-import { WorkspacePlan } from '../types';
+import { X, Building2, AlertTriangle, Key } from 'lucide-react';
 
 interface WorkspaceModalProps {
   isOpen: boolean;
   onClose: () => void;
-  onCreate: (name: string, plan: WorkspacePlan, timezone: string) => Promise<void>;
+  onCreate: (name: string, timezone: string) => Promise<void>;
   licenseStatus?: {
     has_license: boolean;
     allowed_workspaces: number;
@@ -23,7 +22,6 @@ export const WorkspaceModal: React.FC<WorkspaceModalProps> = ({
   onOpenLicenseModal,
 }) => {
   const [name, setName] = useState('');
-  const [plan, setPlan] = useState<WorkspacePlan>('pro');
   const [timezone, setTimezone] = useState('America/New_York');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -50,7 +48,7 @@ export const WorkspaceModal: React.FC<WorkspaceModalProps> = ({
     setError(null);
     setIsSubmitting(true);
     try {
-      await onCreate(name.trim(), plan, timezone);
+      await onCreate(name.trim(), timezone);
       setName('');
       onClose();
     } catch (err: any) {
@@ -147,56 +145,6 @@ export const WorkspaceModal: React.FC<WorkspaceModalProps> = ({
               className="w-full rounded-xl border border-zinc-700 bg-zinc-950 px-4 py-3 text-sm text-zinc-100 placeholder-zinc-500 focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
               autoFocus
             />
-          </div>
-
-          <div>
-            <label className="block text-xs font-medium uppercase tracking-wider text-zinc-400 mb-2">
-              Select Workspace Plan
-            </label>
-            <div className="grid grid-cols-2 gap-3">
-              {/* Free Plan */}
-              <div
-                onClick={() => setPlan('free')}
-                className={`cursor-pointer rounded-xl border p-4 transition-all ${
-                  plan === 'free'
-                    ? 'border-blue-500 bg-blue-500/10 ring-1 ring-blue-500'
-                    : 'border-zinc-800 bg-zinc-950/60 hover:border-zinc-700'
-                }`}
-              >
-                <div className="flex items-center justify-between mb-2">
-                  <span className="font-semibold text-sm text-zinc-200">Free Tier</span>
-                  {plan === 'free' && <Check className="h-4 w-4 text-blue-400" />}
-                </div>
-                <div className="text-xs text-zinc-400 space-y-1">
-                  <p>• Max 3 Connected Channels</p>
-                  <p>• 10 Scheduled Posts Queue</p>
-                  <p>• Standard Dispatch</p>
-                </div>
-              </div>
-
-              {/* Pro Plan */}
-              <div
-                onClick={() => setPlan('pro')}
-                className={`cursor-pointer rounded-xl border p-4 transition-all ${
-                  plan === 'pro'
-                    ? 'border-violet-500 bg-violet-500/10 ring-1 ring-violet-500'
-                    : 'border-zinc-800 bg-zinc-950/60 hover:border-zinc-700'
-                }`}
-              >
-                <div className="flex items-center justify-between mb-2">
-                  <div className="flex items-center gap-1.5">
-                    <span className="font-semibold text-sm text-zinc-100">Pro Agency</span>
-                    <Sparkles className="h-3.5 w-3.5 text-violet-400" />
-                  </div>
-                  {plan === 'pro' && <Check className="h-4 w-4 text-violet-400" />}
-                </div>
-                <div className="text-xs text-zinc-400 space-y-1">
-                  <p>• 50 Connected Channels</p>
-                  <p>• 500 Scheduled Posts</p>
-                  <p>• Auto-Retry & Error Recovery</p>
-                </div>
-              </div>
-            </div>
           </div>
 
           <div>

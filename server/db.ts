@@ -1,6 +1,8 @@
 import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
+import { getSupabase, isSupabaseConfigured, readTable, replaceRows } from './supabase.js';
+import { encryptSocialToken, decryptSocialToken } from './token-crypto.js';
 import {
   User,
   UserRole,
@@ -30,10 +32,18 @@ interface DatabaseSchema {
 const DATA_DIR = path.join(process.cwd(), 'data');
 const DB_FILE = path.join(DATA_DIR, 'omnipost_store.json');
 
-function ensureDirectoryExists(dir: string) {
-  if (!fs.existsSync(dir)) {
-    fs.mkdirSync(dir, { recursive: true });
-  }
+function hashPassword(password: string): string {
+  const salt = crypto.randomBytes(16).toString('hex');
+  const derived = crypto.scryptSync(password, salt, 64).toString('hex');
+  return `scrypt:${salt}:${derived}`;
+}
+
+function verifyPassword(password: string, stored: string): boolean {
+  if (!stored) return false;
+  if (!stored.startsWith('scrypt:')) return stored === password; // legacy in-memory seed only
+  const [, salt, expected] = stored.split(':');
+  const actual = crypto.scryptSync(password, salt, 64).toString('hex');
+  return crypto.timingSafeEqual(Buffer.from(actual, 'hex'), Buffer.from(expected, 'hex'));
 }
 
 // Initial seed data generator
@@ -448,77 +458,268 @@ function getInitialSeed(): DatabaseSchema {
 class DatabaseManager {
   private data: DatabaseSchema;
   private saveTimeout: NodeJS.Timeout | null = null;
+  public readonly ready: Promise<void>;
 
   constructor() {
     this.data = this.loadData();
+    this.ready = this.initializePersistence();
+  }
+
+  private async initializePersistence(): Promise<void> {
+    if (!isSupabaseConfigured()) {
+      console.warn('[OmniPost] Supabase is not configured; using in-memory seed data.');
+      return;
+    }
+
+    try {
+      const [users, passwords, workspaces, licenses, members, accounts, posts, analytics, logs] =
+        await Promise.all([
+          readTable<any>('users'),
+          readTable<any>('app_passwords'),
+          readTable<any>('workspaces'),
+          readTable<any>('licenses'),
+          readTable<any>('workspace_members'),
+          readTable<any>('workspace_accounts'),
+          readTable<any>('posts'),
+          readTable<any>('post_analytics'),
+          readTable<any>('dispatch_logs'),
+        ]);
+
+      const passwordMap = new Map(passwords.map((p: any) => [p.user_id, p.password_hash]));
+      this.data = {
+        users: users.map((u: any) => ({
+          id: u.id,
+          email: u.email || '',
+          name: u.display_name || '',
+          role: u.role === 'admin' ? 'admin' : 'user',
+          avatar_url: undefined,
+          active_license_id: u.active_license_key || undefined,
+          created_at: u.created_at || new Date().toISOString(),
+          password_hash: passwordMap.get(u.id),
+        })) as any,
+        workspaces: workspaces.map((w: any) => ({
+          id: w.id,
+          name: w.name,
+          slug: w.slug || w.id,
+          plan: ['free','pro','enterprise'].includes(w.plan) ? w.plan : 'free',
+          owner_id: w.user_id,
+          is_locked: Boolean(w.is_locked),
+          settings: w.settings || {},
+          created_at: w.created_at,
+          updated_at: w.updated_at || w.created_at,
+        })),
+        license_keys: licenses.map((l: any) => ({
+          id: l.id,
+          key: l.key,
+          label: l.key,
+          max_workspaces: l.max_workspaces || 1,
+          validity_days: l.duration_in_days || 30,
+          created_at: l.created_at,
+          activated_at: l.activated_at || undefined,
+          expires_at: l.expires_at || undefined,
+          is_redeemed: Boolean(l.assigned_to_user_id),
+          redeemed_by_user_id: l.assigned_to_user_id || undefined,
+          is_revoked: l.status === 'revoked',
+          revoked_at: undefined,
+          status: l.status === 'revoked' ? 'revoked' : (l.expires_at && new Date(l.expires_at) < new Date() ? 'expired' : (l.assigned_to_user_id ? 'active' : 'available')),
+        })),
+        workspace_members: members.map((m: any) => ({
+          id: m.id,
+          workspace_id: m.workspace_id,
+          user_id: m.user_id,
+          role: m.role,
+          joined_at: m.joined_at,
+        })),
+        workspace_accounts: accounts.map((a: any) => ({
+          id: a.id,
+          workspace_id: a.workspace_id,
+          platform: a.provider,
+          platform_account_id: a.platform_account_id || a.account_id || a.id,
+          account_name: a.account_name,
+          account_handle: a.account_handle || a.account_id || a.account_name,
+          account_avatar: undefined,
+          is_active: Boolean(a.is_connected),
+          status: a.status || (a.is_connected ? 'active' : 'revoked'),
+          token_expires_at: a.token_expires_at || undefined,
+          metadata: a.metadata || {},
+          last_synced_at: a.last_synced_at || undefined,
+          created_at: a.created_at,
+          updated_at: a.updated_at,
+          access_token_enc: a.access_token,
+          refresh_token_enc: a.refresh_token,
+        })),
+        posts: posts.map((p: any) => ({
+          id: p.id,
+          workspace_id: p.workspace_id,
+          author_id: p.author_id || undefined,
+          content: p.content || '',
+          media_urls: p.media_urls || [],
+          media_type: p.media_type || 'none',
+          target_platforms: p.platforms || [],
+          target_account_ids: p.target_account_ids || [],
+          status: p.status || 'draft',
+          scheduled_at: p.scheduled_time || undefined,
+          published_at: p.published_at || undefined,
+          error_message: p.error_message || undefined,
+          error_details: p.error_details || undefined,
+          platform_post_ids: p.platform_post_ids || {},
+          created_at: p.created_at,
+          updated_at: p.updated_at || p.created_at,
+        })),
+        post_analytics: analytics.map((a: any) => ({ ...a })),
+        dispatch_logs: logs.map((l: any) => ({ ...l })),
+      };
+
+      // Keep an empty Supabase project empty; never create fixed demo admins or license keys.
+
+      console.log(`[OmniPost] Loaded Supabase backend: ${this.data.users.length} users, ${this.data.workspaces.length} workspaces, ${this.data.posts.length} posts.`);
+    } catch (error) {
+      console.error('[OmniPost] Supabase initialization failed:', error);
+      throw error;
+    }
+  }
+
+  private async persistToSupabase(snapshot: DatabaseSchema): Promise<void> {
+    if (!isSupabaseConfigured()) return;
+
+    const users = snapshot.users.map((u: any) => ({
+      id: u.id,
+      email: u.email,
+      display_name: u.name,
+      role: u.role,
+      active_license_key: u.active_license_id || null,
+      max_workspaces: 0,
+      created_at: u.created_at,
+    }));
+
+    const passwords = snapshot.users
+      .filter((u: any) => u.password_hash || u.password)
+      .map((u: any) => ({
+        user_id: u.id,
+        password_hash: u.password_hash || hashPassword(u.password),
+        updated_at: new Date().toISOString(),
+      }));
+
+    const licenses = snapshot.license_keys.map((l: any) => ({
+      id: l.id,
+      key: l.key,
+      duration_in_days: l.validity_days,
+      status: l.is_revoked ? 'revoked' : l.status,
+      assigned_to_user_id: l.redeemed_by_user_id || null,
+      created_at: l.created_at,
+      activated_at: l.activated_at || null,
+      expires_at: l.expires_at || null,
+      max_workspaces: l.max_workspaces,
+    }));
+
+    const workspaces = snapshot.workspaces.map((w: any) => ({
+      id: w.id,
+      name: w.name,
+      slug: w.slug,
+      user_id: w.owner_id,
+      is_locked: Boolean(w.is_locked),
+      connected_accounts: [],
+      plan: w.plan,
+      settings: w.settings || {},
+      created_at: w.created_at,
+      updated_at: w.updated_at,
+    }));
+
+    const members = snapshot.workspace_members.map((m: any) => ({
+      id: m.id,
+      workspace_id: m.workspace_id,
+      user_id: m.user_id,
+      role: m.role,
+      joined_at: m.joined_at,
+    }));
+
+    const accounts = snapshot.workspace_accounts.map((a: any) => ({
+      id: a.id,
+      workspace_id: a.workspace_id,
+      provider: a.platform,
+      account_name: a.account_name,
+      account_id: a.platform_account_id,
+      platform_account_id: a.platform_account_id,
+      account_handle: a.account_handle,
+      access_token: a.access_token_enc || null,
+      refresh_token: a.refresh_token_enc || null,
+      token_expires_at: a.token_expires_at || null,
+      is_connected: Boolean(a.is_active),
+      status: a.status,
+      metadata: a.metadata || {},
+      last_synced_at: a.last_synced_at || null,
+      created_at: a.created_at,
+      updated_at: a.updated_at,
+    }));
+
+    const posts = snapshot.posts.map((p: any) => ({
+      id: p.id,
+      workspace_id: p.workspace_id,
+      author_id: p.author_id || null,
+      content: p.content,
+      scheduled_time: p.scheduled_at || null,
+      status: p.status,
+      media_urls: p.media_urls || [],
+      platforms: p.target_platforms || [],
+      target_account_ids: p.target_account_ids || [],
+      media_type: p.media_type || 'none',
+      published_at: p.published_at || null,
+      error_message: p.error_message || null,
+      error_details: p.error_details || null,
+      platform_post_ids: p.platform_post_ids || {},
+      created_at: p.created_at,
+      updated_at: p.updated_at,
+    }));
+
+    await replaceRows('post_analytics', []);
+    await replaceRows('dispatch_logs', []);
+    await replaceRows('posts', []);
+    await replaceRows('workspace_accounts', []);
+    await replaceRows('workspace_members', []);
+    await replaceRows('licenses', []);
+    await replaceRows('workspaces', []);
+    await replaceRows('app_passwords', []);
+    await replaceRows('users', []);
+
+    await replaceRows('users', users);
+    await replaceRows('app_passwords', passwords);
+    await replaceRows('licenses', licenses);
+    await replaceRows('workspaces', workspaces);
+    await replaceRows('workspace_members', members);
+    await replaceRows('workspace_accounts', accounts);
+    await replaceRows('posts', posts);
+    await replaceRows('post_analytics', snapshot.post_analytics);
+    await replaceRows('dispatch_logs', snapshot.dispatch_logs);
   }
 
   public resetAllData(): DatabaseSchema {
     const seed = getInitialSeed();
     this.data = seed;
-    this.persistSync(seed);
+    this.save();
     return this.data;
   }
 
   private loadData(): DatabaseSchema {
-    const seed = getInitialSeed();
-    try {
-      ensureDirectoryExists(DATA_DIR);
-      if (fs.existsSync(DB_FILE)) {
-        const raw = fs.readFileSync(DB_FILE, 'utf-8');
-        const parsed = JSON.parse(raw);
-        if (parsed.users && Array.isArray(parsed.users)) {
-          if (!parsed.license_keys) parsed.license_keys = seed.license_keys;
-          if (!parsed.workspaces) parsed.workspaces = [];
-          if (!parsed.workspace_members) parsed.workspace_members = [];
-          if (!parsed.workspace_accounts) parsed.workspace_accounts = [];
-          if (!parsed.posts) parsed.posts = [];
-          if (!parsed.post_analytics) parsed.post_analytics = [];
-          if (!parsed.dispatch_logs) parsed.dispatch_logs = [];
-
-          // Ensure admin user exists
-          const hasAdmin = parsed.users.some((u: User) => u.role === 'admin' || u.email === 'admin@omnipost.io');
-          if (!hasAdmin) {
-            parsed.users.unshift(seed.users[0]);
-          }
-          // Ensure client user exists
-          const hasUser = parsed.users.some((u: User) => u.role === 'user');
-          if (!hasUser) {
-            parsed.users.push(seed.users[1] || seed.users[0]);
-          }
-
-          this.persistSync(parsed);
-          return parsed;
-        }
-      }
-    } catch (e) {
-      console.warn('Could not load database file, initializing seed:', e);
-    }
-    this.persistSync(seed);
-    return seed;
+    return getInitialSeed();
   }
 
-  private persistSync(data: DatabaseSchema) {
-    try {
-      ensureDirectoryExists(DATA_DIR);
-      fs.writeFileSync(DB_FILE, JSON.stringify(data, null, 2), 'utf-8');
-    } catch (err) {
-      console.error('Failed to write database file:', err);
-    }
+  private persistSync(_data: DatabaseSchema) {
+    // Supabase is the source of truth. This method remains for backwards compatibility.
   }
 
   public save() {
-    if (this.saveTimeout) {
-      clearTimeout(this.saveTimeout);
-    }
+    if (this.saveTimeout) clearTimeout(this.saveTimeout);
     this.saveTimeout = setTimeout(() => {
-      this.persistSync(this.data);
+      const snapshot = JSON.parse(JSON.stringify(this.data)) as DatabaseSchema;
+      this.persistToSupabase(snapshot).catch((error) => {
+        console.error('[OmniPost] Failed to persist to Supabase:', error);
+      });
     }, 150);
   }
 
   // ================= USERS & AUTH =================
   public getUsers(): User[] {
-    return this.data.users.map(({ password, ...u }) => u as User);
+    return this.data.users.map(({ password, password_hash, ...u }: any) => u as User);
   }
 
   public getUserById(id: string): User | undefined {
@@ -529,35 +730,86 @@ class DatabaseManager {
     return this.data.users.find((u) => u.email.toLowerCase() === email.trim().toLowerCase());
   }
 
-  public authenticate(email: string, password?: string): { user?: User; error?: string } {
-    const user = this.getUserByEmail(email);
-    if (!user) {
-      return { error: 'Account not found with this email address' };
+  public async authenticate(email: string, password?: string): Promise<{ user?: User; error?: string }> {
+    const normalizedEmail = email.trim().toLowerCase();
+    if (!password) return { error: 'Password is required' };
+
+    if (isSupabaseConfigured()) {
+      const { data, error } = await getSupabase().auth.signInWithPassword({
+        email: normalizedEmail,
+        password,
+      });
+      if (error || !data.user) {
+        return { error: 'Invalid email or password. Please check your credentials.' };
+      }
+
+      const authUser = data.user;
+      let user = this.data.users.find((candidate) => candidate.id === authUser.id)
+        || this.getUserByEmail(normalizedEmail);
+
+      if (!user) {
+        user = {
+          id: authUser.id,
+          email: authUser.email || normalizedEmail,
+          name: authUser.user_metadata?.display_name || normalizedEmail.split('@')[0],
+          role: 'user',
+          created_at: authUser.created_at || new Date().toISOString(),
+        };
+        this.data.users.push(user);
+        this.save();
+      }
+
+      const { password: _, password_hash: __, ...cleanUser } = user as any;
+      return { user: cleanUser as User };
     }
-    if (password && user.password && user.password !== password) {
-      return { error: 'Invalid password. Please check your credentials.' };
+
+    const user = this.getUserByEmail(normalizedEmail) as (User & { password_hash?: string }) | undefined;
+    if (!user) return { error: 'Account not found with this email address' };
+
+    const localHash = (user as any).password_hash || user.password;
+    if (!localHash || !verifyPassword(password, localHash)) {
+      return { error: 'Invalid email or password. Please check your credentials.' };
     }
-    const { password: _, ...cleanUser } = user;
+
+    const { password: _, password_hash: __, ...cleanUser } = user as any;
     return { user: cleanUser as User };
   }
 
-  public registerUser(name: string, email: string, password: string = 'user123', role?: 'admin' | 'user'): { user?: User; error?: string } {
+  public async registerUser(name: string, email: string, password: string, _role?: 'admin' | 'user'): Promise<{ user?: User; error?: string }> {
     const normalizedEmail = email.trim().toLowerCase();
     if (this.getUserByEmail(normalizedEmail)) {
       return { error: 'An account with this email already exists' };
     }
-    const assignedRole: 'admin' | 'user' = role || (normalizedEmail.includes('admin') ? 'admin' : 'user');
-    const newUser: User = {
-      id: `usr_${crypto.randomBytes(6).toString('hex')}`,
+
+    let userId: string = crypto.randomUUID();
+
+    // Create the identity in Supabase Auth when the project is configured.
+    // The public.users row is then keyed by the Auth user UUID.
+    if (isSupabaseConfigured()) {
+      const { data, error } = await getSupabase().auth.admin.createUser({
+        email: normalizedEmail,
+        password,
+        email_confirm: true,
+        user_metadata: { display_name: name.trim() },
+      });
+      if (error || !data.user) {
+        return { error: error?.message || 'Unable to create authentication account' };
+      }
+      userId = data.user.id;
+    }
+
+    const newUser: any = {
+      id: userId,
       email: normalizedEmail,
       name: name.trim(),
-      role: assignedRole,
-      password,
+      role: 'user',
+      password_hash: hashPassword(password),
       created_at: new Date().toISOString(),
     };
+
     this.data.users.push(newUser);
     this.save();
-    const { password: _, ...clean } = newUser;
+    const { password: _, password_hash: __, ...clean } = newUser as any;
     return { user: clean as User };
   }
 
@@ -566,10 +818,10 @@ class DatabaseManager {
     if (!user) return null;
     if (updates.name) user.name = updates.name.trim();
     if (updates.email) user.email = updates.email.trim().toLowerCase();
-    if (updates.password) user.password = updates.password;
+    if (updates.password) (user as any).password_hash = hashPassword(updates.password);
     if (updates.avatar_url) user.avatar_url = updates.avatar_url;
     this.save();
-    const { password: _, ...clean } = user;
+    const { password: _, password_hash: __, ...clean } = user as any;
     return clean as User;
   }
 
@@ -600,11 +852,11 @@ class DatabaseManager {
     custom_key?: string;
   }): LicenseKey {
     // Generate clean license code e.g. OMNI-8F32-K921-X014
-    const randomHex = () => crypto.randomBytes(2).toString('hex').toUpperCase();
+    const randomHex = () => crypto.randomBytes(4).toString('hex').toUpperCase();
     const generatedKey = data.custom_key?.trim() || `OMNI-${randomHex()}-${randomHex()}-${randomHex()}`;
 
     const newKey: LicenseKey = {
-      id: `lic_${crypto.randomBytes(6).toString('hex')}`,
+      id: crypto.randomUUID(),
       key: generatedKey.toUpperCase(),
       label: data.label.trim() || `License (${data.max_workspaces} Workspaces)`,
       max_workspaces: Math.max(1, Number(data.max_workspaces) || 1),
@@ -746,583 +998,3 @@ class DatabaseManager {
 
     let activeKey: LicenseKey | undefined;
     if (user.active_license_id) {
-      activeKey = this.data.license_keys.find((k) => k.id === user.active_license_id);
-    } else {
-      // Check if user redeemed any active key
-      activeKey = this.data.license_keys.find((k) => k.redeemed_by_user_id === user.id && !k.is_revoked);
-    }
-
-    const userWorkspaces = this.data.workspaces.filter((w) => w.owner_id === user.id);
-    const activeWorkspaces = userWorkspaces.filter((w) => !w.is_locked);
-
-    if (!activeKey) {
-      return {
-        has_license: false,
-        allowed_workspaces: 0,
-        active_workspaces_count: activeWorkspaces.length,
-        total_workspaces_count: userWorkspaces.length,
-        is_expired: false,
-        is_revoked: false,
-        days_left: 0,
-      };
-    }
-
-    const now = Date.now();
-    const expiresMs = activeKey.expires_at ? new Date(activeKey.expires_at).getTime() : 0;
-    const isExpired = expiresMs > 0 && expiresMs < now;
-    const daysLeft = Math.max(0, Math.ceil((expiresMs - now) / 86400000));
-
-    return {
-      has_license: !isExpired && !activeKey.is_revoked,
-      license: activeKey,
-      allowed_workspaces: isExpired || activeKey.is_revoked ? 0 : activeKey.max_workspaces,
-      active_workspaces_count: activeWorkspaces.length,
-      total_workspaces_count: userWorkspaces.length,
-      is_expired: isExpired,
-      is_revoked: activeKey.is_revoked,
-      days_left: daysLeft,
-    };
-  }
-
-  public setUserActiveWorkspaces(
-    userId: string,
-    activeWorkspaceIds: string[]
-  ): { success: boolean; workspaces?: Workspace[]; error?: string } {
-    const licenseStatus = this.getUserLicenseStatus(userId);
-    const allowed = licenseStatus.allowed_workspaces;
-
-    if (activeWorkspaceIds.length > allowed) {
-      return {
-        success: false,
-        error: `Your license allows maximum ${allowed} active workspace(s). You selected ${activeWorkspaceIds.length}.`,
-      };
-    }
-
-    const userWorkspaces = this.data.workspaces.filter((w) => w.owner_id === userId);
-    userWorkspaces.forEach((w) => {
-      w.is_locked = !activeWorkspaceIds.includes(w.id);
-      w.updated_at = new Date().toISOString();
-    });
-
-    this.save();
-    return {
-      success: true,
-      workspaces: this.getWorkspaces(userId),
-    };
-  }
-
-  // ================= WORKSPACES =================
-  public getWorkspaces(userId?: string): Workspace[] {
-    let list = this.data.workspaces;
-    if (userId) {
-      const user = this.data.users.find((u) => u.id === userId);
-      // If admin, show all workspaces, else filter by owner or member
-      if (user && user.role !== 'admin') {
-        const memberWsIds = this.data.workspace_members.filter((m) => m.user_id === userId).map((m) => m.workspace_id);
-        list = list.filter((w) => w.owner_id === userId || memberWsIds.includes(w.id));
-      }
-    }
-
-    return list.map((ws) => {
-      const accountsCount = this.data.workspace_accounts.filter((a) => a.workspace_id === ws.id && a.is_active).length;
-      const scheduledCount = this.data.posts.filter((p) => p.workspace_id === ws.id && p.status === 'scheduled').length;
-      const publishedCount = this.data.posts.filter((p) => p.workspace_id === ws.id && p.status === 'published').length;
-      const failedCount = this.data.posts.filter((p) => p.workspace_id === ws.id && p.status === 'failed').length;
-
-      return {
-        ...ws,
-        is_locked: ws.is_locked || false,
-        stats: {
-          connected_accounts: accountsCount,
-          scheduled_posts_count: scheduledCount,
-          published_posts_count: publishedCount,
-          failed_posts_count: failedCount,
-        },
-      };
-    });
-  }
-
-  public getWorkspaceById(id: string): Workspace | undefined {
-    const ws = this.data.workspaces.find((w) => w.id === id);
-    if (!ws) return undefined;
-    const accountsCount = this.data.workspace_accounts.filter((a) => a.workspace_id === ws.id && a.is_active).length;
-    const scheduledCount = this.data.posts.filter((p) => p.workspace_id === ws.id && p.status === 'scheduled').length;
-    const publishedCount = this.data.posts.filter((p) => p.workspace_id === ws.id && p.status === 'published').length;
-    const failedCount = this.data.posts.filter((p) => p.workspace_id === ws.id && p.status === 'failed').length;
-
-    return {
-      ...ws,
-      stats: {
-        connected_accounts: accountsCount,
-        scheduled_posts_count: scheduledCount,
-        published_posts_count: publishedCount,
-        failed_posts_count: failedCount,
-      },
-    };
-  }
-
-  public createWorkspace(
-    name: string,
-    plan: WorkspacePlan,
-    timezone: string = 'UTC',
-    userId?: string
-  ): { workspace?: Workspace; error?: string } {
-    const creatorUser = userId ? this.getUserById(userId) || this.data.users[0] : this.data.users[0];
-
-    // License Quota Verification
-    if (creatorUser.role !== 'admin') {
-      const licenseStatus = this.getUserLicenseStatus(creatorUser.id);
-      if (!licenseStatus.has_license) {
-        return {
-          error:
-            'An active license key is required to create a workspace. Please redeem a license key in your profile/license settings.',
-        };
-      }
-      // Check active workspace count
-      const userWorkspaces = this.data.workspaces.filter((w) => w.owner_id === creatorUser.id);
-      const activeWorkspacesCount = userWorkspaces.filter((w) => !w.is_locked).length;
-      if (activeWorkspacesCount >= licenseStatus.allowed_workspaces) {
-        return {
-          error: `License limit reached: Your current license allows maximum ${licenseStatus.allowed_workspaces} active workspace(s). To create a new workspace, please upgrade your license key or lock an existing workspace.`,
-        };
-      }
-    }
-
-    const slug = name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '') || `ws-${Date.now()}`;
-    const id = `ws_${crypto.randomBytes(6).toString('hex')}`;
-
-    const max_accounts = plan === 'pro' ? 50 : plan === 'enterprise' ? 999 : 5;
-    const max_scheduled_posts = plan === 'pro' ? 500 : plan === 'enterprise' ? 5000 : 50;
-
-    const newWs: Workspace = {
-      id,
-      name,
-      slug,
-      plan,
-      owner_id: creatorUser.id,
-      is_locked: false,
-      settings: {
-        timezone,
-        max_accounts,
-        max_scheduled_posts,
-        auto_retry_failed: plan !== 'free',
-      },
-      created_at: new Date().toISOString(),
-      updated_at: new Date().toISOString(),
-    };
-
-    this.data.workspaces.push(newWs);
-    this.data.workspace_members.push({
-      id: `mem_${crypto.randomBytes(6).toString('hex')}`,
-      workspace_id: id,
-      user_id: creatorUser.id,
-      role: 'owner',
-      user: creatorUser,
-      joined_at: new Date().toISOString(),
-    });
-
-    this.save();
-    return { workspace: this.getWorkspaceById(id) };
-  }
-
-  public deleteWorkspace(workspaceId: string, userId?: string): { success: boolean; error?: string } {
-    const wsIndex = this.data.workspaces.findIndex((w) => w.id === workspaceId);
-    if (wsIndex === -1) return { success: false, error: 'Workspace not found' };
-
-    const ws = this.data.workspaces[wsIndex];
-    if (userId) {
-      const user = this.getUserById(userId);
-      if (user && user.role !== 'admin' && ws.owner_id !== userId) {
-        return { success: false, error: 'Unauthorized to delete this workspace' };
-      }
-    }
-
-    this.data.workspaces.splice(wsIndex, 1);
-    this.data.workspace_members = this.data.workspace_members.filter((m) => m.workspace_id !== workspaceId);
-    this.data.workspace_accounts = this.data.workspace_accounts.filter((a) => a.workspace_id !== workspaceId);
-    this.data.posts = this.data.posts.filter((p) => p.workspace_id !== workspaceId);
-    this.save();
-    return { success: true };
-  }
-
-  public toggleWorkspaceLock(workspaceId: string, userId: string): { success: boolean; workspace?: Workspace; error?: string } {
-    const ws = this.data.workspaces.find((w) => w.id === workspaceId);
-    if (!ws) return { success: false, error: 'Workspace not found' };
-
-    const user = this.getUserById(userId);
-    if (!user) return { success: false, error: 'User not found' };
-
-    if (user.role !== 'admin' && ws.owner_id !== userId) {
-      return { success: false, error: 'Unauthorized' };
-    }
-
-    // If attempting to unlock (currently locked)
-    if (ws.is_locked) {
-      const licenseStatus = this.getUserLicenseStatus(userId);
-      if (!licenseStatus.has_license) {
-        return { success: false, error: 'Cannot unlock workspace: No active license.' };
-      }
-      const userWorkspaces = this.data.workspaces.filter((w) => w.owner_id === userId);
-      const activeCount = userWorkspaces.filter((w) => !w.is_locked).length;
-      if (activeCount >= licenseStatus.allowed_workspaces) {
-        return {
-          success: false,
-          error: `Cannot unlock workspace: Your license allows maximum ${licenseStatus.allowed_workspaces} active workspace(s). Lock another workspace first.`,
-        };
-      }
-      ws.is_locked = false;
-    } else {
-      // Locking an active workspace
-      ws.is_locked = true;
-    }
-
-    ws.updated_at = new Date().toISOString();
-    this.save();
-    return { success: true, workspace: this.getWorkspaceById(workspaceId) };
-  }
-
-  public updateWorkspacePlan(workspaceId: string, plan: WorkspacePlan): Workspace | null {
-    const ws = this.data.workspaces.find((w) => w.id === workspaceId);
-    if (!ws) return null;
-    ws.plan = plan;
-    ws.settings.max_accounts = plan === 'pro' ? 50 : plan === 'enterprise' ? 999 : 3;
-    ws.settings.max_scheduled_posts = plan === 'pro' ? 500 : plan === 'enterprise' ? 5000 : 10;
-    ws.updated_at = new Date().toISOString();
-    this.save();
-    return this.getWorkspaceById(workspaceId) || ws;
-  }
-
-  // Workspace Accounts
-  public getAccounts(workspaceId: string): WorkspaceAccount[] {
-    return this.data.workspace_accounts
-      .filter((a) => a.workspace_id === workspaceId && a.is_active)
-      .map(({ access_token_enc, refresh_token_enc, ...rest }) => rest);
-  }
-
-  public getRawAccount(accountId: string) {
-    return this.data.workspace_accounts.find((a) => a.id === accountId);
-  }
-
-  public addAccount(accountData: {
-    workspace_id: string;
-    platform: SocialPlatform;
-    platform_account_id: string;
-    account_name: string;
-    account_handle: string;
-    account_avatar?: string;
-    token_expires_at?: string;
-    metadata?: Record<string, any>;
-    access_token_enc?: string;
-    refresh_token_enc?: string;
-  }): { account?: WorkspaceAccount; error?: string } {
-    const ws = this.getWorkspaceById(accountData.workspace_id);
-    if (!ws) return { error: 'Workspace not found' };
-
-    // Check account limits based on plan
-    const currentActiveAccounts = this.data.workspace_accounts.filter(
-      (a) => a.workspace_id === accountData.workspace_id && a.is_active
-    );
-    if (currentActiveAccounts.length >= ws.settings.max_accounts) {
-      return {
-        error: `Plan limit exceeded: Workspace plan (${ws.plan.toUpperCase()}) allows a maximum of ${ws.settings.max_accounts} connected channels. Upgrade to Pro for unlimited channels.`,
-      };
-    }
-
-    // Check if account already exists in this workspace
-    const existing = this.data.workspace_accounts.find(
-      (a) =>
-        a.workspace_id === accountData.workspace_id &&
-        a.platform === accountData.platform &&
-        a.platform_account_id === accountData.platform_account_id
-    );
-
-    if (existing) {
-      existing.is_active = true;
-      existing.status = 'active';
-      existing.account_name = accountData.account_name;
-      existing.account_handle = accountData.account_handle;
-      if (accountData.account_avatar) existing.account_avatar = accountData.account_avatar;
-      existing.token_expires_at = accountData.token_expires_at || new Date(Date.now() + 60 * 86400000).toISOString();
-      if (accountData.access_token_enc) existing.access_token_enc = accountData.access_token_enc;
-      if (accountData.refresh_token_enc) existing.refresh_token_enc = accountData.refresh_token_enc;
-      existing.updated_at = new Date().toISOString();
-      this.save();
-      const { access_token_enc, refresh_token_enc, ...safe } = existing;
-      return { account: safe };
-    }
-
-    const newAccount = {
-      id: `acc_${accountData.platform}_${crypto.randomBytes(4).toString('hex')}`,
-      workspace_id: accountData.workspace_id,
-      platform: accountData.platform,
-      platform_account_id: accountData.platform_account_id,
-      account_name: accountData.account_name,
-      account_handle: accountData.account_handle,
-      account_avatar: accountData.account_avatar,
-      is_active: true,
-      status: 'active' as const,
-      token_expires_at: accountData.token_expires_at || new Date(Date.now() + 60 * 86400000).toISOString(),
-      metadata: accountData.metadata || {},
-      last_synced_at: new Date().toISOString(),
-      created_at: new Date().toISOString(),
-      updated_at: new Date().toISOString(),
-      access_token_enc: accountData.access_token_enc || `token_${crypto.randomBytes(16).toString('hex')}`,
-      refresh_token_enc: accountData.refresh_token_enc || `ref_${crypto.randomBytes(16).toString('hex')}`,
-    };
-
-    this.data.workspace_accounts.push(newAccount);
-    this.save();
-    const { access_token_enc, refresh_token_enc, ...safe } = newAccount;
-    return { account: safe };
-  }
-
-  public removeAccount(workspaceId: string, accountId: string): boolean {
-    const account = this.data.workspace_accounts.find((a) => a.id === accountId && a.workspace_id === workspaceId);
-    if (!account) return false;
-    account.is_active = false;
-    account.status = 'revoked';
-    this.save();
-    return true;
-  }
-
-  public updateAccountTokens(
-    accountId: string,
-    tokens: { access_token_enc?: string; refresh_token_enc?: string; token_expires_at?: string; status?: 'active' | 'expiring_soon' | 'expired' | 'revoked' }
-  ) {
-    const acc = this.data.workspace_accounts.find((a) => a.id === accountId);
-    if (!acc) return null;
-    if (tokens.access_token_enc) acc.access_token_enc = tokens.access_token_enc;
-    if (tokens.refresh_token_enc) acc.refresh_token_enc = tokens.refresh_token_enc;
-    if (tokens.token_expires_at) acc.token_expires_at = tokens.token_expires_at;
-    if (tokens.status) acc.status = tokens.status;
-    acc.updated_at = new Date().toISOString();
-    this.save();
-    return acc;
-  }
-
-  // Posts
-  public getPosts(
-    workspaceId: string,
-    filter?: {
-      status?: string;
-      platform?: string;
-      search?: string;
-    }
-  ): Post[] {
-    let posts = this.data.posts.filter((p) => p.workspace_id === workspaceId);
-
-    if (filter?.status && filter.status !== 'all') {
-      posts = posts.filter((p) => p.status === filter.status);
-    }
-    if (filter?.platform && filter.platform !== 'all') {
-      posts = posts.filter((p) => p.target_platforms.includes(filter.platform as SocialPlatform));
-    }
-    if (filter?.search) {
-      const q = filter.search.toLowerCase();
-      posts = posts.filter((p) => p.content.toLowerCase().includes(q));
-    }
-
-    // Attach analytics
-    return posts
-      .map((p) => {
-        const ana = this.data.post_analytics.find((a) => a.post_id === p.id);
-        return { ...p, analytics: ana };
-      })
-      .sort((a, b) => {
-        const dateA = new Date(a.scheduled_at || a.created_at).getTime();
-        const dateB = new Date(b.scheduled_at || b.created_at).getTime();
-        return dateB - dateA;
-      });
-  }
-
-  public getPostById(workspaceId: string, postId: string): Post | undefined {
-    const post = this.data.posts.find((p) => p.id === postId && p.workspace_id === workspaceId);
-    if (!post) return undefined;
-    const ana = this.data.post_analytics.find((a) => a.post_id === post.id);
-    return { ...post, analytics: ana };
-  }
-
-  public createPost(postData: {
-    workspace_id: string;
-    content: string;
-    media_urls?: string[];
-    media_type?: 'none' | 'image' | 'video' | 'carousel';
-    target_platforms: SocialPlatform[];
-    target_account_ids: string[];
-    status: PostStatus;
-    scheduled_at?: string;
-  }): { post?: Post; error?: string } {
-    const ws = this.getWorkspaceById(postData.workspace_id);
-    if (!ws) return { error: 'Workspace not found' };
-
-    // Check scheduled posts limit if scheduling
-    if (postData.status === 'scheduled') {
-      const activeScheduled = this.data.posts.filter(
-        (p) => p.workspace_id === postData.workspace_id && p.status === 'scheduled'
-      );
-      if (activeScheduled.length >= ws.settings.max_scheduled_posts) {
-        return {
-          error: `Queue quota limit reached: Current workspace plan (${ws.plan.toUpperCase()}) allows up to ${ws.settings.max_scheduled_posts} scheduled posts in queue. Upgrade to Pro for unlimited queuing.`,
-        };
-      }
-    }
-
-    const defaultUser = this.data.users[0];
-    const newPost: Post = {
-      id: `post_${crypto.randomBytes(6).toString('hex')}`,
-      workspace_id: postData.workspace_id,
-      author_id: defaultUser.id,
-      author_name: defaultUser.name,
-      content: postData.content,
-      media_urls: postData.media_urls || [],
-      media_type: postData.media_type || (postData.media_urls && postData.media_urls.length > 0 ? 'image' : 'none'),
-      target_platforms: postData.target_platforms,
-      target_account_ids: postData.target_account_ids,
-      status: postData.status,
-      scheduled_at: postData.scheduled_at,
-      created_at: new Date().toISOString(),
-      updated_at: new Date().toISOString(),
-    };
-
-    this.data.posts.push(newPost);
-    this.save();
-    return { post: newPost };
-  }
-
-  public updatePost(
-    workspaceId: string,
-    postId: string,
-    updates: Partial<Post>
-  ): { post?: Post; error?: string } {
-    const post = this.data.posts.find((p) => p.id === postId && p.workspace_id === workspaceId);
-    if (!post) return { error: 'Post not found' };
-
-    Object.assign(post, updates, { updated_at: new Date().toISOString() });
-    this.save();
-    return { post: this.getPostById(workspaceId, postId) };
-  }
-
-  public deletePost(workspaceId: string, postId: string): boolean {
-    const idx = this.data.posts.findIndex((p) => p.id === postId && p.workspace_id === workspaceId);
-    if (idx === -1) return false;
-    this.data.posts.splice(idx, 1);
-    this.data.post_analytics = this.data.post_analytics.filter((a) => a.post_id !== postId);
-    this.save();
-    return true;
-  }
-
-  public duplicatePost(workspaceId: string, postId: string): Post | null {
-    const original = this.data.posts.find((p) => p.id === postId && p.workspace_id === workspaceId);
-    if (!original) return null;
-
-    const copy: Post = {
-      ...original,
-      id: `post_${crypto.randomBytes(6).toString('hex')}`,
-      status: 'draft',
-      scheduled_at: undefined,
-      published_at: undefined,
-      error_message: undefined,
-      error_details: undefined,
-      platform_post_ids: undefined,
-      created_at: new Date().toISOString(),
-      updated_at: new Date().toISOString(),
-    };
-
-    this.data.posts.push(copy);
-    this.save();
-    return copy;
-  }
-
-  // Dispatch worker queries & updates
-  public getDueScheduledPosts(): Post[] {
-    const now = new Date();
-    return this.data.posts.filter((p) => {
-      if (p.status !== 'scheduled' || !p.scheduled_at) return false;
-      return new Date(p.scheduled_at) <= now;
-    });
-  }
-
-  public logDispatch(log: Omit<DispatchLog, 'id' | 'created_at'>) {
-    const newLog: DispatchLog = {
-      ...log,
-      id: `log_${crypto.randomBytes(6).toString('hex')}`,
-      created_at: new Date().toISOString(),
-    };
-    this.data.dispatch_logs.unshift(newLog);
-    // Keep max 200 logs
-    if (this.data.dispatch_logs.length > 200) {
-      this.data.dispatch_logs = this.data.dispatch_logs.slice(0, 200);
-    }
-    this.save();
-    return newLog;
-  }
-
-  public getDispatchLogs(workspaceId: string): DispatchLog[] {
-    return this.data.dispatch_logs
-      .filter((l) => l.workspace_id === workspaceId)
-      .slice(0, 50);
-  }
-
-  // Analytics
-  public getWorkspaceAnalytics(workspaceId: string) {
-    const posts = this.data.posts.filter((p) => p.workspace_id === workspaceId && p.status === 'published');
-    const analytics = this.data.post_analytics.filter((a) => posts.some((p) => p.id === a.post_id));
-
-    const totalImpressions = analytics.reduce((sum, a) => sum + a.impressions, 0);
-    const totalReach = analytics.reduce((sum, a) => sum + a.reach, 0);
-    const totalEngagements = analytics.reduce((sum, a) => sum + a.engagements, 0);
-    const totalLikes = analytics.reduce((sum, a) => sum + a.likes, 0);
-    const totalShares = analytics.reduce((sum, a) => sum + a.retweets_shares, 0);
-    const totalComments = analytics.reduce((sum, a) => sum + a.comments, 0);
-    const totalClicks = analytics.reduce((sum, a) => sum + a.clicks, 0);
-
-    const avgEngagementRate = totalReach > 0 ? ((totalEngagements / totalReach) * 100).toFixed(1) : '4.2';
-
-    // Platform distribution
-    const platformBreakdown: Record<SocialPlatform, { posts: number; reach: number; engagements: number }> = {
-      twitter: { posts: 0, reach: 0, engagements: 0 },
-      linkedin: { posts: 0, reach: 0, engagements: 0 },
-      instagram: { posts: 0, reach: 0, engagements: 0 },
-      facebook: { posts: 0, reach: 0, engagements: 0 },
-      youtube: { posts: 0, reach: 0, engagements: 0 },
-    };
-
-    posts.forEach((p) => {
-      const pAnalytics = analytics.find((a) => a.post_id === p.id);
-      p.target_platforms.forEach((plat) => {
-        if (platformBreakdown[plat]) {
-          platformBreakdown[plat].posts += 1;
-          if (pAnalytics) {
-            platformBreakdown[plat].reach += Math.floor(pAnalytics.reach / p.target_platforms.length);
-            platformBreakdown[plat].engagements += Math.floor(pAnalytics.engagements / p.target_platforms.length);
-          }
-        }
-      });
-    });
-
-    return {
-      totals: {
-        impressions: totalImpressions,
-        reach: totalReach,
-        engagements: totalEngagements,
-        likes: totalLikes,
-        shares: totalShares,
-        comments: totalComments,
-        clicks: totalClicks,
-        avgEngagementRate: `${avgEngagementRate}%`,
-        publishedCount: posts.length,
-      },
-      platformBreakdown,
-      topPosts: posts
-        .map((p) => ({
-          ...p,
-          analytics: analytics.find((a) => a.post_id === p.id),
-        }))
-        .filter((p) => p.analytics)
-        .sort((a, b) => (b.analytics?.engagements || 0) - (a.analytics?.engagements || 0))
-        .slice(0, 5),
-    };
-  }
-}
-
-export const db = new DatabaseManager();

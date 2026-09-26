@@ -1,4 +1,5 @@
-import crypto from 'crypto';
+import { publishThroughProvider } from './publishers.js';
+import { oauthService } from './oauth.js';
 import { db } from './db.js';
 import { Post, SocialPlatform, PLATFORM_CONFIGS } from '../src/types.js';
 
@@ -170,27 +171,6 @@ export class SchedulingEngine {
         error_details: undefined,
       });
 
-      // Seed baseline initial analytics for published post
-      const impressions = Math.floor(Math.random() * 2500) + 500;
-      const reach = Math.floor(impressions * 0.78);
-      const engagements = Math.floor(reach * 0.08);
-      const likes = Math.floor(engagements * 0.65);
-      const retweets_shares = Math.floor(engagements * 0.2);
-      const comments = Math.floor(engagements * 0.1);
-      const clicks = Math.floor(engagements * 0.05);
-
-      db['data'].post_analytics.push({
-        id: `ana_${crypto.randomBytes(4).toString('hex')}`,
-        post_id: post.id,
-        impressions,
-        reach,
-        engagements,
-        likes,
-        retweets_shares,
-        comments,
-        clicks,
-        updated_at: new Date().toISOString(),
-      });
       db.save();
 
       return { post: updated.post || post, results: publishResults };
@@ -209,90 +189,53 @@ export class SchedulingEngine {
     }
   }
 
-  // Platform-specific publisher with constraints, media checks, rate limiting & error handling
   private async publishToPlatform(post: Post, account: any): Promise<PublishResult> {
     const platform = account.platform as SocialPlatform;
     const config = PLATFORM_CONFIGS[platform];
-
-    // 1. Check account token validity
-    if (account.status === 'expired' || account.status === 'revoked') {
-      return {
-        platform,
-        accountId: account.id,
-        success: false,
-        errorCode: 'TOKEN_EXPIRED',
-        errorMessage: `${config.name} OAuth access token is expired or revoked.`,
-        actionableRemedy: `Go to Workspace Channels and click "Re-authenticate" on ${config.name} to refresh your credentials.`,
-        executionTimeMs: 0,
-      };
-    }
-
-    if (account.token_expires_at && new Date(account.token_expires_at).getTime() < Date.now()) {
-      return {
-        platform,
-        accountId: account.id,
-        success: false,
-        errorCode: 'TOKEN_EXPIRED',
-        errorMessage: `${config.name} token expired at ${account.token_expires_at}.`,
-        actionableRemedy: `Click "Re-authenticate" on ${config.name} in Channels view to acquire a fresh OAuth 2.0 grant.`,
-        executionTimeMs: 0,
-      };
-    }
-
-    // 2. Platform payload constraint validation
-    if (post.content.length > config.maxCharacters) {
-      return {
-        platform,
-        accountId: account.id,
-        success: false,
-        errorCode: 'PAYLOAD_TOO_LARGE',
-        errorMessage: `Post content length (${post.content.length} characters) exceeds ${config.name}'s strict limit of ${config.maxCharacters} characters.`,
-        actionableRemedy: `Trim ${post.content.length - config.maxCharacters} characters or customize platform-specific copy in the composer.`,
-        executionTimeMs: 0,
-      };
-    }
-
-    // 3. Media requirements validation
-    if (platform === 'instagram' && (!post.media_urls || post.media_urls.length === 0)) {
-      return {
-        platform,
-        accountId: account.id,
-        success: false,
-        errorCode: 'INSTAGRAM_REQUIRES_MEDIA',
-        errorMessage: 'Instagram Graph API content publishing requires at least 1 image or video asset. Pure text updates are not supported by Instagram.',
-        actionableRemedy: 'Attach an image or video to your post before dispatching to Instagram.',
-        executionTimeMs: 0,
-      };
-    }
-
-    if (platform === 'youtube') {
-      const hasVideo = post.media_type === 'video' || post.media_urls.some((u) => u.includes('.mp4') || u.includes('video'));
-      if (!hasVideo && (!post.media_urls || post.media_urls.length === 0)) {
-        return {
-          platform,
-          accountId: account.id,
-          success: false,
-          errorCode: 'YOUTUBE_REQUIRES_VIDEO',
-          errorMessage: 'YouTube Data API v3 uploads require a video asset.',
-          actionableRemedy: 'Attach a valid video asset or target YouTube Community post with media.',
-          executionTimeMs: 0,
-        };
-      }
-    }
-
-    // 4. Rate-limit simulation & delay
-    await new Promise((resolve) => setTimeout(resolve, 300 + Math.floor(Math.random() * 300)));
-
-    // Generate verified platform post ID
-    const platformPostId = `${platform}_${Date.now()}_${crypto.randomBytes(4).toString('hex')}`;
-
-    return {
-      platform,
-      accountId: account.id,
-      success: true,
-      platformPostId,
-      executionTimeMs: 350,
+    if (!config) return {
+      platform, accountId: account.id, success: false, errorCode: 'UNSUPPORTED_PLATFORM',
+      errorMessage: 'This social platform is not supported.', executionTimeMs: 0,
     };
+
+    if (account.status === 'revoked') return {
+      platform, accountId: account.id, success: false, errorCode: 'ACCOUNT_REVOKED',
+      errorMessage: config.name + ' account is disconnected. Reconnect it before publishing.',
+      actionableRemedy: 'Reconnect this account from Workspace Channels.', executionTimeMs: 0,
+    };
+
+    if (account.token_expires_at && new Date(account.token_expires_at).getTime() <= Date.now() + 5 * 60 * 1000) {
+      const refreshed = await oauthService.refreshAccountToken(account.id);
+      if (!refreshed.success) return {
+        platform, accountId: account.id, success: false, errorCode: 'TOKEN_REFRESH_FAILED',
+        errorMessage: refreshed.error || (config.name + ' authorization expired.'),
+        actionableRemedy: 'Reconnect this account from Workspace Channels.', executionTimeMs: 0,
+      };
+      account = db.getRawAccount(account.id) || account;
+    }
+
+    if (!account.access_token_enc) return {
+      platform, accountId: account.id, success: false, errorCode: 'MISSING_PROVIDER_TOKEN',
+      errorMessage: config.name + ' has no usable OAuth access token.',
+      actionableRemedy: 'Reconnect this account from Workspace Channels.', executionTimeMs: 0,
+    };
+
+    if (post.content.length > config.maxCharacters) return {
+      platform, accountId: account.id, success: false, errorCode: 'PAYLOAD_TOO_LARGE',
+      errorMessage: 'Post is longer than ' + config.name + ' allows (' + config.maxCharacters + ' characters).',
+      actionableRemedy: 'Shorten the post for this platform.', executionTimeMs: 0,
+    };
+
+    try {
+      const published = await publishThroughProvider(post, account);
+      return { platform, accountId: account.id, success: true, platformPostId: published.id, executionTimeMs: 0 };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'The social platform rejected this post.';
+      return {
+        platform, accountId: account.id, success: false, errorCode: 'PROVIDER_PUBLISH_FAILED',
+        errorMessage: message, actionableRemedy: 'Check platform permissions and post requirements, then retry.',
+        executionTimeMs: 0,
+      };
+    }
   }
 }
 

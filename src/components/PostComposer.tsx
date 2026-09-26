@@ -34,7 +34,6 @@ interface PostComposerProps {
   initialDate?: string;
   onPostCreated: (post: Post) => void;
   onNavigateToQueue: () => void;
-  onUpgradePlan: () => void;
 }
 
 const PRESET_MEDIA_LIBRARY = [
@@ -66,7 +65,6 @@ export const PostComposer: React.FC<PostComposerProps> = ({
   initialDate,
   onPostCreated,
   onNavigateToQueue,
-  onUpgradePlan,
 }) => {
   const [content, setContent] = useState('');
   const [selectedPlatforms, setSelectedPlatforms] = useState<SocialPlatform[]>(['twitter', 'linkedin']);

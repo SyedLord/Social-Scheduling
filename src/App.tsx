@@ -17,7 +17,6 @@ import {
   WorkspaceAccount,
   Post,
   SocialPlatform,
-  WorkspacePlan,
   User,
 } from './types';
 import {
@@ -212,11 +211,11 @@ export default function App() {
   }, [activeWorkspace?.id]);
 
   // Actions
-  const handleCreateWorkspace = async (name: string, plan: WorkspacePlan, timezone: string) => {
+  const handleCreateWorkspace = async (name: string, timezone: string) => {
     const res = await fetch('/api/workspaces', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name, plan, timezone, owner_id: currentUser?.id }),
+      body: JSON.stringify({ name, timezone, userId: currentUser?.id }),
     });
     const newWs = await res.json();
     if (!res.ok) throw new Error(newWs.error || 'Failed to create workspace');
@@ -224,46 +223,6 @@ export default function App() {
     if (currentUser) await fetchLicenseStatus(currentUser.id);
     setActiveWorkspace(newWs);
     setToast({ message: `Workspace "${newWs.name}" created successfully!`, type: 'success' });
-  };
-
-  const handleUpgradePlan = async (plan: 'pro') => {
-    if (!activeWorkspace) return;
-    try {
-      const res = await fetch(`/api/workspaces/${activeWorkspace.id}/plan`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ plan }),
-      });
-      const updated = await res.json();
-      setActiveWorkspace(updated);
-      await fetchWorkspaces();
-      setToast({
-        message: `Workspace upgraded to ${plan.toUpperCase()}! Quotas expanded.`,
-        type: 'success',
-      });
-    } catch (e) {
-      console.error(e);
-    }
-  };
-
-  const handleConnectSandbox = async (platform: SocialPlatform, handle?: string) => {
-    if (!activeWorkspace) return;
-    if (activeWorkspace.is_locked) {
-      setToast({
-        message: 'This workspace is locked due to license limits. Unlock it to connect channels.',
-        type: 'error',
-      });
-      return;
-    }
-    const res = await fetch(`/api/workspaces/${activeWorkspace.id}/accounts/sandbox-connect`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ platform, handle }),
-    });
-    const data = await res.json();
-    if (!res.ok) throw new Error(data.error || 'Failed to connect');
-    await fetchWorkspaceData(activeWorkspace.id);
-    await fetchWorkspaces();
   };
 
   const handleDisconnect = async (accountId: string) => {
@@ -439,7 +398,6 @@ export default function App() {
         activeWorkspace={activeWorkspace}
         onSelectWorkspace={(ws) => setActiveWorkspace(ws)}
         onOpenNewWorkspaceModal={() => setIsNewWsModalOpen(true)}
-        onUpgradePlan={handleUpgradePlan}
         currentUser={currentUser}
         licenseStatus={licenseStatus}
         onOpenAuthModal={() => setIsAuthModalOpen(true)}
@@ -646,7 +604,6 @@ export default function App() {
               await fetchWorkspaces();
             }}
             onNavigateToQueue={() => setCurrentView('calendar')}
-            onUpgradePlan={() => handleUpgradePlan('pro')}
           />
         )}
 
@@ -724,10 +681,8 @@ export default function App() {
           <AccountsView
             workspace={activeWorkspace}
             accounts={accounts}
-            onConnectSandbox={handleConnectSandbox}
             onDisconnect={handleDisconnect}
             onRefreshToken={handleRefreshToken}
-            onUpgradePlan={() => handleUpgradePlan('pro')}
           />
         )}
 

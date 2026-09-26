@@ -1,8 +1,6 @@
 import React, { useState } from 'react';
 import {
   User as UserIcon,
-  ShieldCheck,
-  UserCheck,
   Lock,
   Mail,
   UserPlus,
@@ -38,29 +36,6 @@ export const AuthModal: React.FC<AuthModalProps> = ({
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   if (!isOpen) return null;
-
-  const handleQuickSwitch = async (targetEmail: string, pass: string) => {
-    setIsSubmitting(true);
-    setErrorMsg('');
-    try {
-      const res = await fetch('/api/auth/login', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email: targetEmail, password: pass }),
-      });
-      const data = await res.json();
-      if (!res.ok || data.error) {
-        setErrorMsg(data.error || 'Failed to switch user');
-        return;
-      }
-      onLoginSuccess(data.user);
-      onClose();
-    } catch (e: any) {
-      setErrorMsg(e.message || 'Error logging in');
-    } finally {
-      setIsSubmitting(false);
-    }
-  };
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -121,9 +96,9 @@ export const AuthModal: React.FC<AuthModalProps> = ({
             </div>
             <div>
               <h2 className="text-sm font-bold text-zinc-100">
-                {mode === 'switch' ? 'Account Profile & Switcher' : mode === 'login' ? 'Sign In to OmniPost' : 'Create New Account'}
+                {mode === 'switch' ? 'Account Profile' : mode === 'login' ? 'Sign In to OmniPost' : 'Create New Account'}
               </h2>
-              <p className="text-[11px] text-zinc-400">Multi-tenant role & workspace authentication</p>
+              <p className="text-[11px] text-zinc-400">Manage your OmniPost account</p>
             </div>
           </div>
           <button
@@ -167,71 +142,6 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                   </div>
                 </div>
                 <CheckCircle2 className="h-4 w-4 text-emerald-400" />
-              </div>
-
-              {/* Fast Presets Switcher */}
-              <div className="space-y-2 pt-2">
-                <div className="text-[11px] text-zinc-400 font-medium uppercase tracking-wider">
-                  Switch Profiles Instantly
-                </div>
-
-                <button
-                  type="button"
-                  disabled={isSubmitting || currentUser?.email === 'admin@omnipost.io'}
-                  onClick={() => handleQuickSwitch('admin@omnipost.io', 'admin123')}
-                  className={`w-full flex items-center justify-between p-3 rounded-xl border transition-all text-left ${
-                    currentUser?.email === 'admin@omnipost.io'
-                      ? 'border-amber-500/40 bg-amber-500/5 cursor-default'
-                      : 'border-zinc-800 bg-zinc-950 hover:border-amber-500/40 hover:bg-zinc-800'
-                  }`}
-                >
-                  <div className="flex items-center gap-3">
-                    <div className="h-8 w-8 rounded-lg bg-amber-500/10 border border-amber-500/20 flex items-center justify-center text-amber-400 shrink-0">
-                      <ShieldCheck className="h-4 w-4" />
-                    </div>
-                    <div>
-                      <div className="font-semibold text-zinc-100 flex items-center gap-2">
-                        <span>System Admin</span>
-                        <span className="text-[10px] text-amber-400 font-medium">(License & Admin Panel)</span>
-                      </div>
-                      <div className="text-[11px] text-zinc-400">admin@omnipost.io</div>
-                    </div>
-                  </div>
-                  {currentUser?.email === 'admin@omnipost.io' ? (
-                    <span className="text-[10px] text-amber-400 font-medium">Current</span>
-                  ) : (
-                    <span className="text-[10px] text-zinc-400 hover:text-zinc-200">Switch →</span>
-                  )}
-                </button>
-
-                <button
-                  type="button"
-                  disabled={isSubmitting || currentUser?.email === 'user@omnipost.io'}
-                  onClick={() => handleQuickSwitch('user@omnipost.io', 'user123')}
-                  className={`w-full flex items-center justify-between p-3 rounded-xl border transition-all text-left ${
-                    currentUser?.email === 'user@omnipost.io'
-                      ? 'border-blue-500/40 bg-blue-500/5 cursor-default'
-                      : 'border-zinc-800 bg-zinc-950 hover:border-blue-500/40 hover:bg-zinc-800'
-                  }`}
-                >
-                  <div className="flex items-center gap-3">
-                    <div className="h-8 w-8 rounded-lg bg-blue-500/10 border border-blue-500/20 flex items-center justify-center text-blue-400 shrink-0">
-                      <UserCheck className="h-4 w-4" />
-                    </div>
-                    <div>
-                      <div className="font-semibold text-zinc-100 flex items-center gap-2">
-                        <span>Standard User</span>
-                        <span className="text-[10px] text-blue-400 font-medium">(Social Workspaces)</span>
-                      </div>
-                      <div className="text-[11px] text-zinc-400">user@omnipost.io</div>
-                    </div>
-                  </div>
-                  {currentUser?.email === 'user@omnipost.io' ? (
-                    <span className="text-[10px] text-blue-400 font-medium">Current</span>
-                  ) : (
-                    <span className="text-[10px] text-zinc-400 hover:text-zinc-200">Switch →</span>
-                  )}
-                </button>
               </div>
 
               <div className="pt-2 flex items-center justify-between border-t border-zinc-800">

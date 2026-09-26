@@ -1,3 +1,4 @@
+import 'dotenv/config';
 import express, { Request, Response } from 'express';
 import path from 'path';
 import { createServer as createViteServer } from 'vite';
@@ -5,15 +6,14 @@ import { GoogleGenAI } from '@google/genai';
 import { db } from './server/db.js';
 import { oauthService } from './server/oauth.js';
 import { schedulingEngine } from './server/scheduler.js';
-import { SocialPlatform, WorkspacePlan } from './src/types.js';
+import { SocialPlatform } from './src/types.js';
 
 const app = express();
 const PORT = 3000;
 
 app.use(express.json());
 
-// Start the background dispatch engine
-schedulingEngine.start();
+// The scheduler starts only after the Supabase cache has been initialized.
 
 // Health check
 app.get('/api/health', (req: Request, res: Response) => {
@@ -37,18 +37,21 @@ app.get('/api/auth/users', (req: Request, res: Response) => {
   res.json(db.getUsers());
 });
 
-app.post('/api/auth/login', (req: Request, res: Response) => {
+app.post('/api/auth/login', async (req: Request, res: Response) => {
   const { email, password } = req.body;
   if (!email) return res.status(400).json({ error: 'Email is required' });
-  const result = db.authenticate(email, password);
+  const result = await db.authenticate(email, password);
   if (result.error) return res.status(401).json({ error: result.error });
   res.json(result);
 });
 
-app.post('/api/auth/register', (req: Request, res: Response) => {
-  const { name, email, password, role } = req.body;
-  if (!name || !email) return res.status(400).json({ error: 'Name and email are required' });
-  const result = db.registerUser(name, email, password || 'user123', role);
+app.post('/api/auth/register', async (req: Request, res: Response) => {
+  const { name, email, password } = req.body;
+  if (!name || !email || !password) return res.status(400).json({ error: 'Name, email, and password are required' });
+  if (typeof password !== 'string' || password.length < 8) {
+    return res.status(400).json({ error: 'Password must be at least 8 characters long' });
+  }
+  const result = await db.registerUser(name, email, password);
   if (result.error) return res.status(400).json({ error: result.error });
   res.status(201).json(result);
 });
@@ -150,11 +153,11 @@ app.get('/api/workspaces/:id', (req: Request, res: Response) => {
 });
 
 app.post('/api/workspaces', (req: Request, res: Response) => {
-  const { name, plan, timezone, userId } = req.body;
+  const { name, timezone, userId } = req.body;
   if (!name || typeof name !== 'string') {
     return res.status(400).json({ error: 'Workspace name is required' });
   }
-  const result = db.createWorkspace(name.trim(), (plan as WorkspacePlan) || 'free', timezone || 'UTC', userId);
+  const result = db.createWorkspace(name.trim(), 'pro', timezone || 'UTC', userId);
   if (result.error) return res.status(400).json({ error: result.error });
   res.status(201).json(result.workspace);
 });
@@ -174,16 +177,6 @@ app.post('/api/workspaces/:id/toggle-lock', (req: Request, res: Response) => {
   res.json(result);
 });
 
-app.patch('/api/workspaces/:id/plan', (req: Request, res: Response) => {
-  const { plan } = req.body;
-  if (!['free', 'pro', 'enterprise'].includes(plan)) {
-    return res.status(400).json({ error: 'Invalid plan' });
-  }
-  const updated = db.updateWorkspacePlan(req.params.id, plan as WorkspacePlan);
-  if (!updated) return res.status(404).json({ error: 'Workspace not found' });
-  res.json(updated);
-});
-
 // ==========================================
 // ACCOUNTS / CHANNELS ROUTES
 // ==========================================
@@ -192,23 +185,8 @@ app.get('/api/workspaces/:id/accounts', (req: Request, res: Response) => {
   res.json(accounts);
 });
 
-app.post('/api/workspaces/:id/accounts/sandbox-connect', (req: Request, res: Response) => {
-  const ws = db.getWorkspaceById(req.params.id);
-  if (!ws) return res.status(404).json({ error: 'Workspace not found' });
-  if (ws.is_locked) {
-    return res.status(403).json({ error: 'This workspace is locked under current license quotas. Unlock it or upgrade your license key to connect accounts.' });
-  }
-
-  const { platform, handle } = req.body;
-  if (!['twitter', 'instagram', 'facebook', 'linkedin', 'youtube'].includes(platform)) {
-    return res.status(400).json({ error: 'Invalid platform' });
-  }
-  const result = oauthService.connectSandboxAccount(platform as SocialPlatform, req.params.id, handle);
-  if (!result.success) {
-    return res.status(400).json({ error: result.error });
-  }
-  const accounts = db.getAccounts(req.params.id);
-  res.status(201).json({ success: true, accounts });
+app.post('/api/workspaces/:id/accounts/sandbox-connect', (_req: Request, res: Response) => {
+  res.status(410).json({ error: 'Sandbox account linking has been removed. Connect through official provider OAuth.' });
 });
 
 app.delete('/api/workspaces/:id/accounts/:accId', (req: Request, res: Response) => {
@@ -372,6 +350,10 @@ app.post('/api/scheduler/trigger', async (req: Request, res: Response) => {
 // ==========================================
 app.get('/api/oauth/:platform/authorize', (req: Request, res: Response) => {
   const { platform } = req.params;
+  const supportedPlatforms: SocialPlatform[] = ['twitter', 'instagram', 'facebook', 'linkedin', 'youtube'];
+  if (!supportedPlatforms.includes(platform as SocialPlatform)) {
+    return res.status(404).json({ error: 'Unsupported social platform.' });
+  }
   const { workspaceId } = req.query;
 
   if (!workspaceId || typeof workspaceId !== 'string') {
@@ -385,6 +367,9 @@ app.get('/api/oauth/:platform/authorize', (req: Request, res: Response) => {
     req.get('host')
   );
 
+  if (!authData.url) {
+    return res.status(503).json({ error: 'Social connection is not configured on the server yet. Provider OAuth keys and SOCIAL_TOKEN_ENCRYPTION_KEY are required.' });
+  }
   res.json(authData);
 });
 
@@ -413,53 +398,6 @@ app.get('/api/oauth/:platform/callback', async (req: Request, res: Response) => 
   } else {
     return res.redirect(`/?oauth_error=${encodeURIComponent(result.error || 'OAuth token exchange failed')}`);
   }
-});
-
-// Sandbox Consent Screen
-app.get('/api/oauth/sandbox-consent', (req: Request, res: Response) => {
-  const { platform, state, workspaceId } = req.query;
-  const mockCode = `auth_code_${Date.now()}`;
-  const callbackUrl = `/api/oauth/${platform}/callback?code=${mockCode}&state=${state}`;
-
-  const platformNames: Record<string, string> = {
-    twitter: 'X (Twitter)',
-    instagram: 'Instagram Creator',
-    facebook: 'Facebook Pages',
-    linkedin: 'LinkedIn Share',
-    youtube: 'YouTube Data API',
-  };
-
-  const name = platformNames[String(platform)] || 'Social Platform';
-
-  res.send(`
-    <!DOCTYPE html>
-    <html lang="en">
-      <head>
-        <meta charset="UTF-8" />
-        <title>Connect ${name} | OmniPost OAuth 2.0</title>
-        <style>
-          body { background: #09090b; color: #f4f4f5; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; display: flex; align-items: center; justify-content: center; height: 100vh; margin: 0; }
-          .card { background: #18181b; border: 1px solid #27272a; border-radius: 16px; padding: 32px; max-width: 440px; width: 90%; text-align: center; box-shadow: 0 20px 40px rgba(0,0,0,0.5); }
-          h2 { margin: 0 0 12px; font-size: 20px; font-weight: 600; }
-          p { color: #a1a1aa; font-size: 14px; line-height: 1.5; margin-bottom: 24px; }
-          .badge { display: inline-block; background: #27272a; color: #38bdf8; padding: 4px 10px; border-radius: 999px; font-size: 12px; font-family: monospace; margin-bottom: 16px; }
-          .btn-primary { background: #3b82f6; color: #fff; text-decoration: none; padding: 12px 24px; border-radius: 10px; font-weight: 600; display: block; margin-bottom: 12px; transition: background 0.2s; }
-          .btn-primary:hover { background: #2563eb; }
-          .btn-cancel { color: #71717a; text-decoration: none; font-size: 13px; }
-          .btn-cancel:hover { color: #d4d4d8; }
-        </style>
-      </head>
-      <body>
-        <div class="card">
-          <div class="badge">OAuth 2.0 PKCE Verification</div>
-          <h2>Authorize OmniPost for ${name}</h2>
-          <p>OmniPost is requesting permission to publish posts, analyze engagements, and read basic channel profile information for your workspace.</p>
-          <a href="${callbackUrl}" class="btn-primary">Authorize & Connect Account</a>
-          <a href="/?oauth_cancelled=true" class="btn-cancel">Cancel and return to dashboard</a>
-        </div>
-      </body>
-    </html>
-  `);
 });
 
 // ==========================================
@@ -515,6 +453,8 @@ Guidelines:
 // VITE CLIENT MIDDLEWARE
 // ==========================================
 async function startServer() {
+  await db.ready;
+  schedulingEngine.start();
   if (process.env.NODE_ENV !== 'production') {
     const vite = await createViteServer({
       server: { middlewareMode: true },

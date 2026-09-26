@@ -1,6 +1,5 @@
 import React, { useState } from 'react';
 import {
-  ShieldCheck,
   User as UserIcon,
   Lock,
   Mail,
@@ -37,40 +36,12 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onLoginSuccess }) => {
   const [signupPassword, setSignupPassword] = useState('');
   const [signupConfirmPassword, setSignupConfirmPassword] = useState('');
   const [showSignupPassword, setShowSignupPassword] = useState(false);
-  const [signupRole, setSignupRole] = useState<'user' | 'admin'>('user');
   const [agreeTerms, setAgreeTerms] = useState(true);
 
   // UI state
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
-
-  // Quick Account Login handler
-  const handleQuickLogin = async (email: string, pass: string) => {
-    setIsLoading(true);
-    setErrorMsg(null);
-    setSuccessMsg(null);
-    try {
-      const res = await fetch('/api/auth/login', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email: email.trim(), password: pass }),
-      });
-      const data = await res.json();
-      if (!res.ok || data.error) {
-        setErrorMsg(data.error || 'Failed to authenticate');
-        return;
-      }
-      setSuccessMsg(`Welcome back, ${data.user.name}!`);
-      setTimeout(() => {
-        onLoginSuccess(data.user);
-      }, 300);
-    } catch (err: any) {
-      setErrorMsg(err.message || 'Network error signing in');
-    } finally {
-      setIsLoading(false);
-    }
-  };
 
   // Sign In Form submission
   const handleSignInSubmit = async (e: React.FormEvent) => {
@@ -122,8 +93,8 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onLoginSuccess }) => {
       setErrorMsg('Please provide a valid work email address');
       return;
     }
-    if (!signupPassword || signupPassword.length < 6) {
-      setErrorMsg('Password must be at least 6 characters long');
+    if (!signupPassword || signupPassword.length < 8) {
+      setErrorMsg('Password must be at least 8 characters long');
       return;
     }
     if (signupPassword !== signupConfirmPassword) {
@@ -147,7 +118,6 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onLoginSuccess }) => {
           name: signupName.trim(),
           email: signupEmail.trim(),
           password: signupPassword,
-          role: signupRole,
         }),
       });
       const data = await res.json();
@@ -293,7 +263,7 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onLoginSuccess }) => {
                 <div>
                   <div className="flex items-center justify-between mb-1.5">
                     <label className="block text-xs font-medium text-zinc-300">Password</label>
-                    <span className="text-[11px] text-zinc-500">Default demo: admin123 / user123</span>
+                    
                   </div>
                   <div className="relative">
                     <Lock className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-zinc-500" />
@@ -387,7 +357,7 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onLoginSuccess }) => {
                         type={showSignupPassword ? 'text' : 'password'}
                         value={signupPassword}
                         onChange={(e) => setSignupPassword(e.target.value)}
-                        placeholder="Min 6 chars"
+                        placeholder="At least 8 chars"
                         required
                         className="w-full pl-9 pr-8 py-2.5 rounded-xl bg-zinc-950 border border-zinc-800 focus:border-blue-500 focus:ring-1 focus:ring-blue-500 text-zinc-100 placeholder-zinc-500 text-xs transition-colors"
                       />
@@ -414,43 +384,6 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onLoginSuccess }) => {
                         className="w-full pl-9 pr-3.5 py-2.5 rounded-xl bg-zinc-950 border border-zinc-800 focus:border-blue-500 focus:ring-1 focus:ring-blue-500 text-zinc-100 placeholder-zinc-500 text-xs transition-colors"
                       />
                     </div>
-                  </div>
-                </div>
-
-                <div>
-                  <label className="block text-xs font-medium text-zinc-300 mb-1.5">Account Role</label>
-                  <div className="grid grid-cols-2 gap-2">
-                    <button
-                      type="button"
-                      onClick={() => setSignupRole('user')}
-                      className={`p-2.5 rounded-xl border text-left transition-all ${
-                        signupRole === 'user'
-                          ? 'border-blue-500/60 bg-blue-500/10 text-white'
-                          : 'border-zinc-800 bg-zinc-950/60 text-zinc-400 hover:border-zinc-700'
-                      }`}
-                    >
-                      <div className="text-xs font-semibold flex items-center gap-1.5">
-                        <UserIcon className="w-3.5 h-3.5 text-blue-400" />
-                        <span>Client / Creator</span>
-                      </div>
-                      <div className="text-[10px] text-zinc-400 mt-0.5">Workspace publisher</div>
-                    </button>
-
-                    <button
-                      type="button"
-                      onClick={() => setSignupRole('admin')}
-                      className={`p-2.5 rounded-xl border text-left transition-all ${
-                        signupRole === 'admin'
-                          ? 'border-amber-500/60 bg-amber-500/10 text-white'
-                          : 'border-zinc-800 bg-zinc-950/60 text-zinc-400 hover:border-zinc-700'
-                      }`}
-                    >
-                      <div className="text-xs font-semibold flex items-center gap-1.5">
-                        <ShieldCheck className="w-3.5 h-3.5 text-amber-400" />
-                        <span>Administrator</span>
-                      </div>
-                      <div className="text-[10px] text-zinc-400 mt-0.5">Key management & oversight</div>
-                    </button>
                   </div>
                 </div>
 
@@ -485,66 +418,13 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onLoginSuccess }) => {
               </form>
             )}
 
-            {/* DIVIDER */}
-            <div className="relative my-6 text-center">
-              <div className="absolute inset-0 flex items-center">
-                <div className="w-full border-t border-zinc-800" />
-              </div>
-              <div className="relative inline-block px-3 bg-zinc-900 text-[10px] uppercase font-bold tracking-wider text-zinc-500">
-                Fast Demo Access
-              </div>
-            </div>
 
-            {/* QUICK ONE-CLICK TEST LOGINS */}
-            <div className="space-y-2">
-              <div className="text-[11px] text-zinc-400 text-center mb-2">
-                Click any pre-configured demo account to sign in instantly:
-              </div>
-
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                {/* Admin Quick Login Button */}
-                <button
-                  type="button"
-                  disabled={isLoading}
-                  onClick={() => handleQuickLogin('admin@omnipost.io', 'admin123')}
-                  className="p-3 rounded-xl border border-zinc-800 hover:border-amber-500/40 bg-zinc-950/80 hover:bg-zinc-800/60 text-left transition-all flex items-start gap-2.5 group"
-                >
-                  <div className="w-7 h-7 rounded-lg bg-amber-500/10 border border-amber-500/20 flex items-center justify-center text-amber-400 shrink-0 group-hover:scale-105 transition-transform">
-                    <ShieldCheck className="w-4 h-4" />
-                  </div>
-                  <div className="truncate">
-                    <div className="text-xs font-semibold text-zinc-200 group-hover:text-amber-300 transition-colors flex items-center gap-1">
-                      <span>Admin Login</span>
-                    </div>
-                    <div className="text-[10px] text-zinc-400 font-mono truncate">admin@omnipost.io</div>
-                  </div>
-                </button>
-
-                {/* Standard User Quick Login Button */}
-                <button
-                  type="button"
-                  disabled={isLoading}
-                  onClick={() => handleQuickLogin('user@omnipost.io', 'user123')}
-                  className="p-3 rounded-xl border border-zinc-800 hover:border-blue-500/40 bg-zinc-950/80 hover:bg-zinc-800/60 text-left transition-all flex items-start gap-2.5 group"
-                >
-                  <div className="w-7 h-7 rounded-lg bg-blue-500/10 border border-blue-500/20 flex items-center justify-center text-blue-400 shrink-0 group-hover:scale-105 transition-transform">
-                    <UserIcon className="w-4 h-4" />
-                  </div>
-                  <div className="truncate">
-                    <div className="text-xs font-semibold text-zinc-200 group-hover:text-blue-300 transition-colors flex items-center gap-1">
-                      <span>User Login</span>
-                    </div>
-                    <div className="text-[10px] text-zinc-400 font-mono truncate">user@omnipost.io</div>
-                  </div>
-                </button>
-              </div>
-            </div>
           </div>
 
           {/* Security & Multi-tenant note */}
           <div className="text-center mt-4 text-[11px] text-zinc-500 flex items-center justify-center gap-1.5">
             <Lock className="w-3 h-3 text-zinc-600" />
-            <span>Encrypted authentication session & multi-tenant workspace isolation</span>
+            <span>Email and password authentication powered by Supabase</span>
           </div>
         </div>
       </main>
