@@ -1,187 +1,85 @@
--- =====================================================================
--- OMNIPOST: PRODUCTION MULTI-TENANT SOCIAL MEDIA SCHEDULING SAAS
--- PostgreSQL / Supabase Migration Schema with Row Level Security (RLS)
--- =====================================================================
+-- OmniPost / Social Scheduler Supabase compatibility migration
+-- This project already contains public.users, licenses, workspaces, posts and
+-- workspace_accounts. Run this file only against that existing project.
 
--- 1. EXTENSIONS
-CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
-CREATE EXTENSION IF NOT EXISTS "pgcrypto";
-
--- 2. ENUM TYPES
-DO $$ BEGIN
-    CREATE TYPE workspace_plan AS ENUM ('free', 'pro', 'enterprise');
-EXCEPTION
-    WHEN duplicate_object THEN null;
-END $$;
-
-DO $$ BEGIN
-    CREATE TYPE member_role AS ENUM ('owner', 'admin', 'editor', 'viewer');
-EXCEPTION
-    WHEN duplicate_object THEN null;
-END $$;
-
-DO $$ BEGIN
-    CREATE TYPE social_platform AS ENUM ('instagram', 'facebook', 'twitter', 'linkedin', 'youtube');
-EXCEPTION
-    WHEN duplicate_object THEN null;
-END $$;
-
-DO $$ BEGIN
-    CREATE TYPE account_status AS ENUM ('active', 'expiring_soon', 'expired', 'revoked');
-EXCEPTION
-    WHEN duplicate_object THEN null;
-END $$;
-
-DO $$ BEGIN
-    CREATE TYPE post_status AS ENUM ('draft', 'scheduled', 'publishing', 'published', 'failed', 'cancelled');
-EXCEPTION
-    WHEN duplicate_object THEN null;
-END $$;
-
-DO $$ BEGIN
-    CREATE TYPE media_type AS ENUM ('none', 'image', 'video', 'carousel');
-EXCEPTION
-    WHEN duplicate_object THEN null;
-END $$;
-
--- 3. USERS TABLE
-CREATE TABLE IF NOT EXISTS users (
-    id TEXT PRIMARY KEY,
-    email TEXT UNIQUE NOT NULL,
-    name TEXT NOT NULL,
-    role TEXT NOT NULL DEFAULT 'user',
-    password_hash TEXT,
-    avatar_url TEXT,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+create table if not exists public.app_passwords (
+  user_id uuid primary key references public.users(id) on delete cascade,
+  password_hash text not null,
+  updated_at timestamptz not null default now()
 );
+alter table public.app_passwords enable row level security;
+revoke all on public.app_passwords from anon, authenticated;
 
+alter table public.users add column if not exists updated_at timestamptz not null default now();
 
--- 4A. LICENSE KEYS (application licensing layer)
-CREATE TABLE IF NOT EXISTS license_keys (
-    id TEXT PRIMARY KEY,
-    key TEXT UNIQUE NOT NULL,
-    label TEXT NOT NULL,
-    max_workspaces INT NOT NULL,
-    validity_days INT NOT NULL,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    activated_at TIMESTAMPTZ,
-    expires_at TIMESTAMPTZ,
-    is_redeemed BOOLEAN NOT NULL DEFAULT FALSE,
-    redeemed_by_user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
-    redeemed_by_user_email TEXT,
-    is_revoked BOOLEAN NOT NULL DEFAULT FALSE,
-    revoked_at TIMESTAMPTZ,
-    status TEXT NOT NULL DEFAULT 'available'
+alter table public.workspaces add column if not exists slug text;
+alter table public.workspaces add column if not exists plan text not null default 'free';
+alter table public.workspaces add column if not exists settings jsonb not null default '{"timezone":"UTC","max_accounts":3,"max_scheduled_posts":10,"auto_retry_failed":false}'::jsonb;
+alter table public.workspaces add column if not exists updated_at timestamptz not null default now();
+update public.workspaces set slug = regexp_replace(lower(name), '[^a-z0-9]+', '-', 'g') where slug is null;
+create unique index if not exists idx_workspaces_slug on public.workspaces(slug);
+
+alter table public.posts add column if not exists author_id uuid references public.users(id) on delete set null;
+alter table public.posts add column if not exists media_type text not null default 'none';
+alter table public.posts add column if not exists target_account_ids uuid[] not null default '{}';
+alter table public.posts add column if not exists published_at timestamptz;
+alter table public.posts add column if not exists error_message text;
+alter table public.posts add column if not exists error_details jsonb;
+alter table public.posts add column if not exists platform_post_ids jsonb not null default '{}'::jsonb;
+alter table public.posts add column if not exists updated_at timestamptz not null default now();
+
+alter table public.workspace_accounts add column if not exists status text not null default 'active';
+alter table public.workspace_accounts add column if not exists metadata jsonb not null default '{}';
+alter table public.workspace_accounts add column if not exists last_synced_at timestamptz;
+alter table public.workspace_accounts add column if not exists platform_account_id text;
+update public.workspace_accounts set platform_account_id = account_id where platform_account_id is null;
+alter table public.workspace_accounts add column if not exists account_handle text;
+update public.workspace_accounts set account_handle = coalesce(account_handle, account_id, account_name) where account_handle is null;
+
+create table if not exists public.workspace_members (
+  id uuid primary key default gen_random_uuid(),
+  workspace_id uuid not null references public.workspaces(id) on delete cascade,
+  user_id uuid not null references public.users(id) on delete cascade,
+  role text not null default 'editor',
+  joined_at timestamptz not null default now(),
+  unique(workspace_id,user_id)
 );
+alter table public.workspace_members enable row level security;
 
--- 4. WORKSPACES TABLE (Multi-Tenant Core)
-CREATE TABLE IF NOT EXISTS workspaces (
-    id TEXT PRIMARY KEY,
-    name TEXT NOT NULL,
-    slug TEXT UNIQUE NOT NULL,
-    plan workspace_plan NOT NULL DEFAULT 'free',
-    owner_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    settings JSONB NOT NULL DEFAULT '{"timezone": "UTC", "max_accounts": 3, "max_scheduled_posts": 10}',
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    is_locked BOOLEAN NOT NULL DEFAULT FALSE
+create table if not exists public.post_analytics (
+  id uuid primary key default gen_random_uuid(),
+  post_id uuid not null references public.posts(id) on delete cascade,
+  workspace_account_id uuid references public.workspace_accounts(id) on delete cascade,
+  platform text,
+  impressions integer not null default 0,
+  reach integer not null default 0,
+  engagements integer not null default 0,
+  likes integer not null default 0,
+  retweets_shares integer not null default 0,
+  comments integer not null default 0,
+  clicks integer not null default 0,
+  updated_at timestamptz not null default now(),
+  unique(post_id,workspace_account_id)
 );
+alter table public.post_analytics enable row level security;
 
--- 5. WORKSPACE MEMBERS TABLE (RBAC)
-CREATE TABLE IF NOT EXISTS workspace_members (
-    id TEXT PRIMARY KEY,
-    workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
-    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    role member_role NOT NULL DEFAULT 'editor',
-    joined_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    UNIQUE (workspace_id, user_id)
+create table if not exists public.dispatch_logs (
+  id uuid primary key default gen_random_uuid(),
+  workspace_id uuid not null references public.workspaces(id) on delete cascade,
+  post_id uuid references public.posts(id) on delete set null,
+  workspace_account_id uuid references public.workspace_accounts(id) on delete set null,
+  platform text not null,
+  status text not null,
+  error_code text,
+  error_message text,
+  payload_preview jsonb,
+  execution_time_ms integer not null default 0,
+  created_at timestamptz not null default now()
 );
+alter table public.dispatch_logs enable row level security;
 
--- 6. WORKSPACE ACCOUNTS (Connected Social Media Channels)
-CREATE TABLE IF NOT EXISTS workspace_accounts (
-    id TEXT PRIMARY KEY,
-    workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
-    platform social_platform NOT NULL,
-    platform_account_id TEXT NOT NULL,
-    account_name TEXT NOT NULL,
-    account_handle TEXT NOT NULL,
-    account_avatar TEXT,
-    access_token_enc TEXT NOT NULL,
-    refresh_token_enc TEXT,
-    token_expires_at TIMESTAMPTZ,
-    is_active BOOLEAN NOT NULL DEFAULT TRUE,
-    status account_status NOT NULL DEFAULT 'active',
-    metadata JSONB NOT NULL DEFAULT '{}',
-    last_synced_at TIMESTAMPTZ,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    UNIQUE (workspace_id, platform, platform_account_id)
-);
-
--- 7. POSTS TABLE (Draft, Scheduled, Published)
-CREATE TABLE IF NOT EXISTS posts (
-    id TEXT PRIMARY KEY,
-    workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
-    author_id TEXT REFERENCES users(id) ON DELETE SET NULL,
-    content TEXT NOT NULL,
-    media_urls TEXT[] DEFAULT '{}',
-    media_type media_type NOT NULL DEFAULT 'none',
-    target_platforms TEXT[] NOT NULL DEFAULT '{}',
-    target_account_ids TEXT[] NOT NULL DEFAULT '{}',
-    status post_status NOT NULL DEFAULT 'draft',
-    scheduled_at TIMESTAMPTZ,
-    published_at TIMESTAMPTZ,
-    error_message TEXT,
-    error_details JSONB,
-    platform_post_ids JSONB DEFAULT '{}',
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-
--- 8. POST ANALYTICS TABLE
-CREATE TABLE IF NOT EXISTS post_analytics (
-    id TEXT PRIMARY KEY,
-    post_id TEXT NOT NULL REFERENCES posts(id) ON DELETE CASCADE,
-    workspace_account_id TEXT REFERENCES workspace_accounts(id) ON DELETE CASCADE,
-    platform social_platform,
-    impressions INT NOT NULL DEFAULT 0,
-    reach INT NOT NULL DEFAULT 0,
-    engagements INT NOT NULL DEFAULT 0,
-    likes INT NOT NULL DEFAULT 0,
-    retweets_shares INT NOT NULL DEFAULT 0,
-    comments INT NOT NULL DEFAULT 0,
-    clicks INT NOT NULL DEFAULT 0,
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    UNIQUE (post_id, workspace_account_id)
-);
-
--- 9. DISPATCH WORKER LOGS
-CREATE TABLE IF NOT EXISTS dispatch_logs (
-    id TEXT PRIMARY KEY,
-    workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
-    post_id TEXT REFERENCES posts(id) ON DELETE SET NULL,
-    workspace_account_id TEXT REFERENCES workspace_accounts(id) ON DELETE SET NULL,
-    platform social_platform NOT NULL,
-    status TEXT NOT NULL, -- 'success', 'failure', 'rate_limited'
-    error_code TEXT,
-    error_message TEXT,
-    payload_preview JSONB,
-    execution_time_ms INT NOT NULL DEFAULT 0,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-
--- 10. INDEXES FOR HIGH-THROUGHPUT POLLING & MULTI-TENANCY
-CREATE INDEX IF NOT EXISTS idx_workspaces_owner ON workspaces(owner_id);
-CREATE INDEX IF NOT EXISTS idx_workspace_members_user ON workspace_members(user_id);
-CREATE INDEX IF NOT EXISTS idx_workspace_accounts_ws ON workspace_accounts(workspace_id);
-CREATE INDEX IF NOT EXISTS idx_workspace_accounts_status ON workspace_accounts(status);
-CREATE INDEX IF NOT EXISTS idx_posts_ws_status ON posts(workspace_id, status);
-CREATE INDEX IF NOT EXISTS idx_posts_scheduled_worker ON posts(status, scheduled_at) WHERE status = 'scheduled';
-CREATE INDEX IF NOT EXISTS idx_post_analytics_post ON post_analytics(post_id);
-CREATE INDEX IF NOT EXISTS idx_dispatch_logs_ws ON dispatch_logs(workspace_id, created_at DESC);
-
--- 11. BACKEND AUTHORIZATION
--- The Express API currently authenticates requests and uses the Supabase service-role key.
--- Keep these tables private to the backend for this migration. If the app later moves
--- session handling to Supabase Auth, enable RLS and add auth.uid()-based policies.
+create index if not exists idx_workspace_members_user on public.workspace_members(user_id);
+create index if not exists idx_posts_workspace_status on public.posts(workspace_id,status);
+create index if not exists idx_posts_scheduled_worker on public.posts(status,scheduled_time);
+create index if not exists idx_workspace_accounts_workspace on public.workspace_accounts(workspace_id);
+create index if not exists idx_licenses_assigned_user on public.licenses(assigned_to_user_id);
