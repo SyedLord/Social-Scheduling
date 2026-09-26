@@ -246,26 +246,6 @@ export default function App() {
     }
   };
 
-  const handleConnectSandbox = async (platform: SocialPlatform, handle?: string) => {
-    if (!activeWorkspace) return;
-    if (activeWorkspace.is_locked) {
-      setToast({
-        message: 'This workspace is locked due to license limits. Unlock it to connect channels.',
-        type: 'error',
-      });
-      return;
-    }
-    const res = await fetch(`/api/workspaces/${activeWorkspace.id}/accounts/sandbox-connect`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ platform, handle }),
-    });
-    const data = await res.json();
-    if (!res.ok) throw new Error(data.error || 'Failed to connect');
-    await fetchWorkspaceData(activeWorkspace.id);
-    await fetchWorkspaces();
-  };
-
   const handleDisconnect = async (accountId: string) => {
     if (!activeWorkspace) return;
     await fetch(`/api/workspaces/${activeWorkspace.id}/accounts/${accountId}`, { method: 'DELETE' });
@@ -724,7 +704,6 @@ export default function App() {
           <AccountsView
             workspace={activeWorkspace}
             accounts={accounts}
-            onConnectSandbox={handleConnectSandbox}
             onDisconnect={handleDisconnect}
             onRefreshToken={handleRefreshToken}
             onUpgradePlan={() => handleUpgradePlan('pro')}
