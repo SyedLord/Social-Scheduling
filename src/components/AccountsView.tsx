@@ -18,7 +18,6 @@ import { WorkspaceAccount, SocialPlatform, PLATFORM_CONFIGS, Workspace } from '.
 interface AccountsViewProps {
   workspace: Workspace;
   accounts: WorkspaceAccount[];
-  onConnectSandbox: (platform: SocialPlatform, handle?: string) => Promise<void>;
   onDisconnect: (accountId: string) => Promise<void>;
   onRefreshToken: (accountId: string) => Promise<void>;
   onUpgradePlan: () => void;
@@ -27,14 +26,12 @@ interface AccountsViewProps {
 export const AccountsView: React.FC<AccountsViewProps> = ({
   workspace,
   accounts,
-  onConnectSandbox,
   onDisconnect,
   onRefreshToken,
   onUpgradePlan,
 }) => {
   const [selectedPlatform, setSelectedPlatform] = useState<SocialPlatform | null>(null);
   const [isModalOpen, setIsModalOpen] = useState(false);
-  const [customHandle, setCustomHandle] = useState('');
   const [loadingAction, setLoadingAction] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
 
@@ -42,7 +39,6 @@ export const AccountsView: React.FC<AccountsViewProps> = ({
 
   const handleOpenConnect = (platform: SocialPlatform) => {
     setSelectedPlatform(platform);
-    setCustomHandle('');
     setIsModalOpen(true);
   };
 
@@ -58,21 +54,6 @@ export const AccountsView: React.FC<AccountsViewProps> = ({
       }
     } catch (err: any) {
       setNotice(err.message || 'Failed to initiate OAuth');
-    } finally {
-      setLoadingAction(null);
-    }
-  };
-
-  const handleConnectInstant = async () => {
-    if (!selectedPlatform) return;
-    try {
-      setLoadingAction('connecting');
-      await onConnectSandbox(selectedPlatform, customHandle.trim() || undefined);
-      setIsModalOpen(false);
-      setNotice(`Connected ${PLATFORM_CONFIGS[selectedPlatform].name} successfully!`);
-      setTimeout(() => setNotice(null), 4000);
-    } catch (err: any) {
-      setNotice(err.message || 'Connection failed');
     } finally {
       setLoadingAction(null);
     }
