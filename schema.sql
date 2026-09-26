@@ -46,21 +46,43 @@ END $$;
 
 -- 3. USERS TABLE
 CREATE TABLE IF NOT EXISTS users (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    id TEXT PRIMARY KEY,
     email TEXT UNIQUE NOT NULL,
     name TEXT NOT NULL,
+    role TEXT NOT NULL DEFAULT 'user',
+    password_hash TEXT,
     avatar_url TEXT,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    is_locked BOOLEAN NOT NULL DEFAULT FALSE
+);
+
+
+-- 4A. LICENSE KEYS (application licensing layer)
+CREATE TABLE IF NOT EXISTS license_keys (
+    id TEXT PRIMARY KEY,
+    key TEXT UNIQUE NOT NULL,
+    label TEXT NOT NULL,
+    max_workspaces INT NOT NULL,
+    validity_days INT NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    activated_at TIMESTAMPTZ,
+    expires_at TIMESTAMPTZ,
+    is_redeemed BOOLEAN NOT NULL DEFAULT FALSE,
+    redeemed_by_user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+    redeemed_by_user_email TEXT,
+    is_revoked BOOLEAN NOT NULL DEFAULT FALSE,
+    revoked_at TIMESTAMPTZ,
+    status TEXT NOT NULL DEFAULT 'available'
 );
 
 -- 4. WORKSPACES TABLE (Multi-Tenant Core)
 CREATE TABLE IF NOT EXISTS workspaces (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    id TEXT PRIMARY KEY,
     name TEXT NOT NULL,
     slug TEXT UNIQUE NOT NULL,
     plan workspace_plan NOT NULL DEFAULT 'free',
-    owner_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    owner_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     settings JSONB NOT NULL DEFAULT '{"timezone": "UTC", "max_accounts": 3, "max_scheduled_posts": 10}',
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
@@ -68,9 +90,9 @@ CREATE TABLE IF NOT EXISTS workspaces (
 
 -- 5. WORKSPACE MEMBERS TABLE (RBAC)
 CREATE TABLE IF NOT EXISTS workspace_members (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    workspace_id UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
-    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    id TEXT PRIMARY KEY,
+    workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     role member_role NOT NULL DEFAULT 'editor',
     joined_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     UNIQUE (workspace_id, user_id)
@@ -78,8 +100,8 @@ CREATE TABLE IF NOT EXISTS workspace_members (
 
 -- 6. WORKSPACE ACCOUNTS (Connected Social Media Channels)
 CREATE TABLE IF NOT EXISTS workspace_accounts (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    workspace_id UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+    id TEXT PRIMARY KEY,
+    workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
     platform social_platform NOT NULL,
     platform_account_id TEXT NOT NULL,
     account_name TEXT NOT NULL,
@@ -99,14 +121,14 @@ CREATE TABLE IF NOT EXISTS workspace_accounts (
 
 -- 7. POSTS TABLE (Draft, Scheduled, Published)
 CREATE TABLE IF NOT EXISTS posts (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    workspace_id UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
-    author_id UUID NOT NULL REFERENCES users(id) ON DELETE SET NULL,
+    id TEXT PRIMARY KEY,
+    workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+    author_id TEXT NOT NULL REFERENCES users(id) ON DELETE SET NULL,
     content TEXT NOT NULL,
     media_urls TEXT[] DEFAULT '{}',
     media_type media_type NOT NULL DEFAULT 'none',
     target_platforms TEXT[] NOT NULL DEFAULT '{}',
-    target_account_ids UUID[] NOT NULL DEFAULT '{}',
+    target_account_ids TEXT[] NOT NULL DEFAULT '{}',
     status post_status NOT NULL DEFAULT 'draft',
     scheduled_at TIMESTAMPTZ,
     published_at TIMESTAMPTZ,
@@ -119,9 +141,9 @@ CREATE TABLE IF NOT EXISTS posts (
 
 -- 8. POST ANALYTICS TABLE
 CREATE TABLE IF NOT EXISTS post_analytics (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    post_id UUID NOT NULL REFERENCES posts(id) ON DELETE CASCADE,
-    workspace_account_id UUID NOT NULL REFERENCES workspace_accounts(id) ON DELETE CASCADE,
+    id TEXT PRIMARY KEY,
+    post_id TEXT NOT NULL REFERENCES posts(id) ON DELETE CASCADE,
+    workspace_account_id TEXT NOT NULL REFERENCES workspace_accounts(id) ON DELETE CASCADE,
     platform social_platform NOT NULL,
     impressions INT NOT NULL DEFAULT 0,
     reach INT NOT NULL DEFAULT 0,
@@ -136,10 +158,10 @@ CREATE TABLE IF NOT EXISTS post_analytics (
 
 -- 9. DISPATCH WORKER LOGS
 CREATE TABLE IF NOT EXISTS dispatch_logs (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    workspace_id UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
-    post_id UUID REFERENCES posts(id) ON DELETE SET NULL,
-    workspace_account_id UUID REFERENCES workspace_accounts(id) ON DELETE SET NULL,
+    id TEXT PRIMARY KEY,
+    workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+    post_id TEXT REFERENCES posts(id) ON DELETE SET NULL,
+    workspace_account_id TEXT REFERENCES workspace_accounts(id) ON DELETE SET NULL,
     platform social_platform NOT NULL,
     status TEXT NOT NULL, -- 'success', 'failure', 'rate_limited'
     error_code TEXT,
@@ -160,6 +182,8 @@ CREATE INDEX IF NOT EXISTS idx_post_analytics_post ON post_analytics(post_id);
 CREATE INDEX IF NOT EXISTS idx_dispatch_logs_ws ON dispatch_logs(workspace_id, created_at DESC);
 
 -- 11. ROW LEVEL SECURITY (RLS) POLICIES
+ALTER TABLE users DISABLE ROW LEVEL SECURITY;
+ALTER TABLE license_keys DISABLE ROW LEVEL SECURITY;
 ALTER TABLE workspaces ENABLE ROW LEVEL SECURITY;
 ALTER TABLE workspace_members ENABLE ROW LEVEL SECURITY;
 ALTER TABLE workspace_accounts ENABLE ROW LEVEL SECURITY;
