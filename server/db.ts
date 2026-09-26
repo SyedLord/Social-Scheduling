@@ -2,6 +2,7 @@ import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
 import { getSupabase, isSupabaseConfigured, readTable, replaceRows } from './supabase.js';
+import { encryptSocialToken, decryptSocialToken } from './token-crypto.js';
 import {
   User,
   UserRole,
@@ -997,4 +998,3 @@ class DatabaseManager {
 
     let activeKey: LicenseKey | undefined;
     if (user.active_license_id) {
-      activeKey = this.data.license_keys.find((k) => k.id === user.active_license_id);
