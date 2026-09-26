@@ -36,7 +36,7 @@ app.get('/api/auth/users', (req: Request, res: Response) => {
   res.json(db.getUsers());
 });
 
-app.post('/api/auth/login', (req: Request, res: Response) => {
+app.post('/api/auth/login', async (req: Request, res: Response) => {
   const { email, password } = req.body;
   if (!email) return res.status(400).json({ error: 'Email is required' });
   const result = await db.authenticate(email, password);
@@ -44,7 +44,7 @@ app.post('/api/auth/login', (req: Request, res: Response) => {
   res.json(result);
 });
 
-app.post('/api/auth/register', (req: Request, res: Response) => {
+app.post('/api/auth/register', async (req: Request, res: Response) => {
   const { name, email, password, role } = req.body;
   if (!name || !email) return res.status(400).json({ error: 'Name and email are required' });
   const result = await db.registerUser(name, email, password || 'user123', role);
