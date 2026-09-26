@@ -10,14 +10,14 @@ This migration intentionally uses the application's existing string IDs so the f
 
 ## 2. Configure the backend
 
-Set these server-side environment variables:
+Set these server-side environment variables for the existing Social Scheduler project:
 
 ```env
 SUPABASE_URL=https://YOUR_PROJECT.supabase.co
-SUPABASE_SERVICE_ROLE_KEY=YOUR_SERVICE_ROLE_KEY
+SUPABASE_SECRET_KEY=YOUR_SB_SECRET_KEY
 ```
 
-Keep `SUPABASE_SERVICE_ROLE_KEY` server-only. Do not put it in Vite/client environment variables and do not commit it to GitHub.
+Keep `SUPABASE_SECRET_KEY` server-only. Do not put it in Vite/client environment variables and do not commit it to GitHub.
 
 Existing OAuth and Gemini variables remain unchanged.
 
@@ -43,3 +43,10 @@ For a production deployment, use a fresh Supabase database and rotate any OAuth/
 This migration keeps OmniPost's existing Express authentication/API contract to avoid breaking the frontend. Passwords are persisted as scrypt hashes in Supabase rather than plaintext.
 
 A later phase can move user sessions fully to Supabase Auth + JWT/RLS without changing the core database model.
+
+
+## Existing project status
+
+The project `nyisxskizrgosytrzpwb` was inspected before integration. Existing users and licenses were preserved. The compatibility migration was applied to the existing schema; it did not replace the database.
+
+The existing Supabase Auth users are used for sign-in. New accounts created from OmniPost are also created in Supabase Auth.
