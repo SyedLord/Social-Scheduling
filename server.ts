@@ -47,8 +47,11 @@ app.post('/api/auth/login', async (req: Request, res: Response) => {
 
 app.post('/api/auth/register', async (req: Request, res: Response) => {
   const { name, email, password } = req.body;
-  if (!name || !email) return res.status(400).json({ error: 'Name and email are required' });
-  const result = await db.registerUser(name, email, password || 'user123');
+  if (!name || !email || !password) return res.status(400).json({ error: 'Name, email, and password are required' });
+  if (typeof password !== 'string' || password.length < 8) {
+    return res.status(400).json({ error: 'Password must be at least 8 characters long' });
+  }
+  const result = await db.registerUser(name, email, password);
   if (result.error) return res.status(400).json({ error: result.error });
   res.status(201).json(result);
 });
