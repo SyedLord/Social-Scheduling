@@ -12,8 +12,7 @@ const PORT = 3000;
 
 app.use(express.json());
 
-// Start the background dispatch engine
-schedulingEngine.start();
+// The scheduler starts only after the Supabase cache has been initialized.
 
 // Health check
 app.get('/api/health', (req: Request, res: Response) => {
@@ -515,6 +514,8 @@ Guidelines:
 // VITE CLIENT MIDDLEWARE
 // ==========================================
 async function startServer() {
+  await db.ready;
+  schedulingEngine.start();
   if (process.env.NODE_ENV !== 'production') {
     const vite = await createViteServer({
       server: { middlewareMode: true },
