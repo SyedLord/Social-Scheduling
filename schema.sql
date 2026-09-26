@@ -123,7 +123,7 @@ CREATE TABLE IF NOT EXISTS workspace_accounts (
 CREATE TABLE IF NOT EXISTS posts (
     id TEXT PRIMARY KEY,
     workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
-    author_id TEXT NOT NULL REFERENCES users(id) ON DELETE SET NULL,
+    author_id TEXT REFERENCES users(id) ON DELETE SET NULL,
     content TEXT NOT NULL,
     media_urls TEXT[] DEFAULT '{}',
     media_type media_type NOT NULL DEFAULT 'none',
@@ -143,8 +143,8 @@ CREATE TABLE IF NOT EXISTS posts (
 CREATE TABLE IF NOT EXISTS post_analytics (
     id TEXT PRIMARY KEY,
     post_id TEXT NOT NULL REFERENCES posts(id) ON DELETE CASCADE,
-    workspace_account_id TEXT NOT NULL REFERENCES workspace_accounts(id) ON DELETE CASCADE,
-    platform social_platform NOT NULL,
+    workspace_account_id TEXT REFERENCES workspace_accounts(id) ON DELETE CASCADE,
+    platform social_platform,
     impressions INT NOT NULL DEFAULT 0,
     reach INT NOT NULL DEFAULT 0,
     engagements INT NOT NULL DEFAULT 0,
@@ -181,55 +181,7 @@ CREATE INDEX IF NOT EXISTS idx_posts_scheduled_worker ON posts(status, scheduled
 CREATE INDEX IF NOT EXISTS idx_post_analytics_post ON post_analytics(post_id);
 CREATE INDEX IF NOT EXISTS idx_dispatch_logs_ws ON dispatch_logs(workspace_id, created_at DESC);
 
--- 11. ROW LEVEL SECURITY (RLS) POLICIES
-ALTER TABLE users DISABLE ROW LEVEL SECURITY;
-ALTER TABLE license_keys DISABLE ROW LEVEL SECURITY;
-ALTER TABLE workspaces ENABLE ROW LEVEL SECURITY;
-ALTER TABLE workspace_members ENABLE ROW LEVEL SECURITY;
-ALTER TABLE workspace_accounts ENABLE ROW LEVEL SECURITY;
-ALTER TABLE posts ENABLE ROW LEVEL SECURITY;
-ALTER TABLE post_analytics ENABLE ROW LEVEL SECURITY;
-ALTER TABLE dispatch_logs ENABLE ROW LEVEL SECURITY;
-
--- Helper function: Check if current authenticated user belongs to workspace
-CREATE OR REPLACE FUNCTION is_workspace_member(ws_id UUID)
-RETURNS BOOLEAN AS $$
-BEGIN
-    RETURN EXISTS (
-        SELECT 1 FROM workspace_members
-        WHERE workspace_id = ws_id AND user_id = auth.uid()
-    );
-END;
-$$ LANGUAGE plpgsql SECURITY DEFINER;
-
--- Workspaces policy
-CREATE POLICY "Users can access workspaces they belong to"
-ON workspaces FOR ALL
-USING (
-    owner_id = auth.uid() OR
-    id IN (SELECT workspace_id FROM workspace_members WHERE user_id = auth.uid())
-);
-
--- Workspace Accounts policy
-CREATE POLICY "Members can access workspace channels"
-ON workspace_accounts FOR ALL
-USING (is_workspace_member(workspace_id));
-
--- Posts policy
-CREATE POLICY "Members can access workspace posts"
-ON posts FOR ALL
-USING (is_workspace_member(workspace_id));
-
--- Analytics policy
-CREATE POLICY "Members can access workspace post analytics"
-ON post_analytics FOR ALL
-USING (
-    post_id IN (
-        SELECT id FROM posts WHERE is_workspace_member(workspace_id)
-    )
-);
-
--- Dispatch logs policy
-CREATE POLICY "Members can view workspace dispatch logs"
-ON dispatch_logs FOR SELECT
-USING (is_workspace_member(workspace_id));
+-- 11. BACKEND AUTHORIZATION
+-- The Express API currently authenticates requests and uses the Supabase service-role key.
+-- Keep these tables private to the backend for this migration. If the app later moves
+-- session handling to Supabase Auth, enable RLS and add auth.uid()-based policies.
