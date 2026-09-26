@@ -9,7 +9,6 @@ import {
   ExternalLink,
   Shield,
   Clock,
-  Sparkles,
   Layers,
   X,
 } from 'lucide-react';
@@ -20,7 +19,6 @@ interface AccountsViewProps {
   accounts: WorkspaceAccount[];
   onDisconnect: (accountId: string) => Promise<void>;
   onRefreshToken: (accountId: string) => Promise<void>;
-  onUpgradePlan: () => void;
 }
 
 export const AccountsView: React.FC<AccountsViewProps> = ({
@@ -28,7 +26,6 @@ export const AccountsView: React.FC<AccountsViewProps> = ({
   accounts,
   onDisconnect,
   onRefreshToken,
-  onUpgradePlan,
 }) => {
   const [selectedPlatform, setSelectedPlatform] = useState<SocialPlatform | null>(null);
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -96,15 +93,6 @@ export const AccountsView: React.FC<AccountsViewProps> = ({
             </span>{' '}
             channels
           </div>
-          {isAtQuota && workspace.plan === 'free' && (
-            <button
-              onClick={onUpgradePlan}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-violet-600 text-xs font-semibold text-white hover:bg-violet-500 transition-colors shadow-sm"
-            >
-              <Sparkles className="h-3.5 w-3.5" />
-              <span>Upgrade Quota</span>
-            </button>
-          )}
         </div>
       </div>
 
