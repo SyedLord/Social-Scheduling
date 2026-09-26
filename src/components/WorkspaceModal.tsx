@@ -147,13 +147,6 @@ export const WorkspaceModal: React.FC<WorkspaceModalProps> = ({
             />
           </div>
 
-          <div className="rounded-xl border border-zinc-800 bg-zinc-950/60 p-4">
-            <div className="text-sm font-semibold text-zinc-200">Standard workspace</div>
-            <p className="mt-1 text-xs text-zinc-400">
-              Your license key controls how many workspaces you can use and for how long. Every workspace uses the same features.
-            </p>
-          </div>
-
           <div>
             <label className="block text-xs font-medium uppercase tracking-wider text-zinc-400 mb-2">
               Default Scheduling Timezone
