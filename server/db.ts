@@ -509,9 +509,9 @@ class DatabaseManager {
   private async persistToSupabase(snapshot: DatabaseSchema): Promise<void> {
     if (!isSupabaseConfigured()) return;
 
-    const users = snapshot.users.map(({ password, ...u }: any) => ({
+    const users = snapshot.users.map(({ password, password_hash, ...u }: any) => ({
       ...u,
-      password_hash: password ? hashPassword(password) : undefined,
+      password_hash: password_hash || (password ? hashPassword(password) : null),
     }));
 
     // Delete children first, then rebuild the small application cache.
@@ -567,7 +567,7 @@ class DatabaseManager {
 
   // ================= USERS & AUTH =================
   public getUsers(): User[] {
-    return this.data.users.map(({ password, ...u }) => u as User);
+    return this.data.users.map(({ password, password_hash, ...u }: any) => u as User);
   }
 
   public getUserById(id: string): User | undefined {
@@ -590,12 +590,12 @@ class DatabaseManager {
     return { user: cleanUser as User };
   }
 
-  public registerUser(name: string, email: string, password: string = 'user123', role?: 'admin' | 'user'): { user?: User; error?: string } {
+  public registerUser(name: string, email: string, password: string = 'user123', _role?: 'admin' | 'user'): { user?: User; error?: string } {
     const normalizedEmail = email.trim().toLowerCase();
     if (this.getUserByEmail(normalizedEmail)) {
       return { error: 'An account with this email already exists' };
     }
-    const assignedRole: 'admin' | 'user' = role || (normalizedEmail.includes('admin') ? 'admin' : 'user');
+    const assignedRole: 'admin' | 'user' = 'user';
     const newUser: User = {
       id: `usr_${crypto.randomBytes(6).toString('hex')}`,
       email: normalizedEmail,
@@ -615,10 +615,10 @@ class DatabaseManager {
     if (!user) return null;
     if (updates.name) user.name = updates.name.trim();
     if (updates.email) user.email = updates.email.trim().toLowerCase();
-    if (updates.password) user.password = updates.password;
+    if (updates.password) (user as any).password_hash = hashPassword(updates.password);
     if (updates.avatar_url) user.avatar_url = updates.avatar_url;
     this.save();
-    const { password: _, ...clean } = user;
+    const { password: _, password_hash: __, ...clean } = user as any;
     return clean as User;
   }
 
