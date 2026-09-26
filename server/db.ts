@@ -742,26 +742,44 @@ class DatabaseManager {
   }
 
   public async authenticate(email: string, password?: string): Promise<{ user?: User; error?: string }> {
-    const user = this.getUserByEmail(email) as (User & { password_hash?: string }) | undefined;
-    if (!user) {
-      return { error: 'Account not found with this email address' };
-    }
+    const normalizedEmail = email.trim().toLowerCase();
+    if (!password) return { error: 'Password is required' };
 
-    if (password) {
-      const localHash = (user as any).password_hash || user.password;
-      let valid = localHash ? verifyPassword(password, localHash) : false;
-
-      // Existing users in this Supabase project are linked to Supabase Auth.
-      // Prefer Auth validation when no application password hash exists.
-      if (!valid && isSupabaseConfigured() && !localHash) {
-        const { error } = await getSupabase().auth.signInWithPassword({
-          email: email.trim().toLowerCase(),
-          password,
-        });
-        valid = !error;
+    if (isSupabaseConfigured()) {
+      const { data, error } = await getSupabase().auth.signInWithPassword({
+        email: normalizedEmail,
+        password,
+      });
+      if (error || !data.user) {
+        return { error: 'Invalid email or password. Please check your credentials.' };
       }
 
-      if (!valid) return { error: 'Invalid password. Please check your credentials.' };
+      const authUser = data.user;
+      let user = this.data.users.find((candidate) => candidate.id === authUser.id)
+        || this.getUserByEmail(normalizedEmail);
+
+      if (!user) {
+        user = {
+          id: authUser.id as User['id'],
+          email: authUser.email || normalizedEmail,
+          name: authUser.user_metadata?.display_name || normalizedEmail.split('@')[0],
+          role: 'user',
+          created_at: authUser.created_at || new Date().toISOString(),
+        };
+        this.data.users.push(user);
+        this.save();
+      }
+
+      const { password: _, password_hash: __, ...cleanUser } = user as any;
+      return { user: cleanUser as User };
+    }
+
+    const user = this.getUserByEmail(normalizedEmail) as (User & { password_hash?: string }) | undefined;
+    if (!user) return { error: 'Account not found with this email address' };
+
+    const localHash = (user as any).password_hash || user.password;
+    if (!localHash || !verifyPassword(password, localHash)) {
+      return { error: 'Invalid email or password. Please check your credentials.' };
     }
 
     const { password: _, password_hash: __, ...cleanUser } = user as any;
