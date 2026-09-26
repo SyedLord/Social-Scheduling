@@ -39,7 +39,7 @@ app.get('/api/auth/users', (req: Request, res: Response) => {
 app.post('/api/auth/login', (req: Request, res: Response) => {
   const { email, password } = req.body;
   if (!email) return res.status(400).json({ error: 'Email is required' });
-  const result = db.authenticate(email, password);
+  const result = await db.authenticate(email, password);
   if (result.error) return res.status(401).json({ error: result.error });
   res.json(result);
 });
@@ -47,7 +47,7 @@ app.post('/api/auth/login', (req: Request, res: Response) => {
 app.post('/api/auth/register', (req: Request, res: Response) => {
   const { name, email, password, role } = req.body;
   if (!name || !email) return res.status(400).json({ error: 'Name and email are required' });
-  const result = db.registerUser(name, email, password || 'user123', role);
+  const result = await db.registerUser(name, email, password || 'user123', role);
   if (result.error) return res.status(400).json({ error: result.error });
   res.status(201).json(result);
 });
