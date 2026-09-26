@@ -27,7 +27,6 @@ interface SidebarProps {
   activeWorkspace: Workspace | null;
   onSelectWorkspace: (ws: Workspace) => void;
   onOpenNewWorkspaceModal: () => void;
-  onUpgradePlan: (plan: 'pro') => void;
   currentUser: User | null;
   licenseStatus: {
     has_license: boolean;
@@ -51,7 +50,6 @@ export const Sidebar: React.FC<SidebarProps> = ({
   activeWorkspace,
   onSelectWorkspace,
   onOpenNewWorkspaceModal,
-  onUpgradePlan,
   currentUser,
   licenseStatus,
   onOpenAuthModal,
@@ -159,14 +157,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
                         Locked
                       </span>
                     ) : (
-                      <span
-                        className={`text-[10px] font-medium uppercase px-1 rounded ${
-                          activeWorkspace?.plan === 'pro'
-                            ? 'bg-violet-500/20 text-violet-300'
-                            : 'bg-zinc-800 text-zinc-400'
-                        }`}
-                      >
-                        {activeWorkspace?.plan || 'Free'}
+                      <span className="text-[10px] font-medium uppercase px-1 rounded bg-zinc-800 text-zinc-400">
+                        Standard
                       </span>
                     )}
                     <span className="text-[10px] text-zinc-400">• {accountsUsed} channels</span>
