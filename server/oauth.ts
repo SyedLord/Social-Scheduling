@@ -90,7 +90,7 @@ export class OAuthService {
           });
           url = `https://twitter.com/i/oauth2/authorize?${params.toString()}`;
         } else {
-          url = `${appUrl}/api/oauth/sandbox-consent?platform=twitter&state=${state}&workspaceId=${workspaceId}`;
+          url = '';
         }
         break;
       }
@@ -108,7 +108,7 @@ export class OAuthService {
           });
           url = `https://www.facebook.com/v19.0/dialog/oauth?${params.toString()}`;
         } else {
-          url = `${appUrl}/api/oauth/sandbox-consent?platform=instagram&state=${state}&workspaceId=${workspaceId}`;
+          url = '';
         }
         break;
       }
@@ -126,7 +126,7 @@ export class OAuthService {
           });
           url = `https://www.facebook.com/v19.0/dialog/oauth?${params.toString()}`;
         } else {
-          url = `${appUrl}/api/oauth/sandbox-consent?platform=facebook&state=${state}&workspaceId=${workspaceId}`;
+          url = '';
         }
         break;
       }
@@ -144,7 +144,7 @@ export class OAuthService {
           });
           url = `https://www.linkedin.com/oauth/v2/authorization?${params.toString()}`;
         } else {
-          url = `${appUrl}/api/oauth/sandbox-consent?platform=linkedin&state=${state}&workspaceId=${workspaceId}`;
+          url = '';
         }
         break;
       }
@@ -164,7 +164,7 @@ export class OAuthService {
           });
           url = `https://accounts.google.com/o/oauth2/v2/auth?${params.toString()}`;
         } else {
-          url = `${appUrl}/api/oauth/sandbox-consent?platform=youtube&state=${state}&workspaceId=${workspaceId}`;
+          url = '';
         }
         break;
       }
@@ -201,8 +201,7 @@ export class OAuthService {
       } else if (platform === 'youtube' && process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET) {
         return await this.exchangeGoogleLiveToken(session.workspaceId, code, redirectUri);
       } else {
-        // High fidelity sandbox account setup
-        return this.connectSandboxAccount(platform, session.workspaceId);
+        return { success: false, error: `Live OAuth credentials are not configured for ${platform}.` };
       }
     } catch (err: any) {
       console.error(`Error exchanging token for ${platform}:`, err);
