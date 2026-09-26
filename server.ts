@@ -6,7 +6,7 @@ import { GoogleGenAI } from '@google/genai';
 import { db } from './server/db.js';
 import { oauthService } from './server/oauth.js';
 import { schedulingEngine } from './server/scheduler.js';
-import { SocialPlatform, WorkspacePlan } from './src/types.js';
+import { SocialPlatform } from './src/types.js';
 
 const app = express();
 const PORT = 3000;
@@ -153,11 +153,11 @@ app.get('/api/workspaces/:id', (req: Request, res: Response) => {
 });
 
 app.post('/api/workspaces', (req: Request, res: Response) => {
-  const { name, plan, timezone, userId } = req.body;
+  const { name, timezone, userId } = req.body;
   if (!name || typeof name !== 'string') {
     return res.status(400).json({ error: 'Workspace name is required' });
   }
-  const result = db.createWorkspace(name.trim(), (plan as WorkspacePlan) || 'free', timezone || 'UTC', userId);
+  const result = db.createWorkspace(name.trim(), 'pro', timezone || 'UTC', userId);
   if (result.error) return res.status(400).json({ error: result.error });
   res.status(201).json(result.workspace);
 });
@@ -175,16 +175,6 @@ app.post('/api/workspaces/:id/toggle-lock', (req: Request, res: Response) => {
   const result = db.toggleWorkspaceLock(req.params.id, userId);
   if (!result.success) return res.status(400).json({ error: result.error });
   res.json(result);
-});
-
-app.patch('/api/workspaces/:id/plan', (req: Request, res: Response) => {
-  const { plan } = req.body;
-  if (!['free', 'pro', 'enterprise'].includes(plan)) {
-    return res.status(400).json({ error: 'Invalid plan' });
-  }
-  const updated = db.updateWorkspacePlan(req.params.id, plan as WorkspacePlan);
-  if (!updated) return res.status(404).json({ error: 'Workspace not found' });
-  res.json(updated);
 });
 
 // ==========================================
