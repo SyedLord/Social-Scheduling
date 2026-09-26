@@ -350,6 +350,10 @@ app.post('/api/scheduler/trigger', async (req: Request, res: Response) => {
 // ==========================================
 app.get('/api/oauth/:platform/authorize', (req: Request, res: Response) => {
   const { platform } = req.params;
+  const supportedPlatforms: SocialPlatform[] = ['twitter', 'instagram', 'facebook', 'linkedin', 'youtube'];
+  if (!supportedPlatforms.includes(platform as SocialPlatform)) {
+    return res.status(404).json({ error: 'Unsupported social platform.' });
+  }
   const { workspaceId } = req.query;
 
   if (!workspaceId || typeof workspaceId !== 'string') {
@@ -364,7 +368,7 @@ app.get('/api/oauth/:platform/authorize', (req: Request, res: Response) => {
   );
 
   if (!authData.url) {
-    return res.status(503).json({ error: `Live OAuth credentials are not configured for ${platform}.` });
+    return res.status(503).json({ error: 'Social connection is not configured on the server yet. Provider OAuth keys and SOCIAL_TOKEN_ENCRYPTION_KEY are required.' });
   }
   res.json(authData);
 });
@@ -394,53 +398,6 @@ app.get('/api/oauth/:platform/callback', async (req: Request, res: Response) => 
   } else {
     return res.redirect(`/?oauth_error=${encodeURIComponent(result.error || 'OAuth token exchange failed')}`);
   }
-});
-
-// Sandbox Consent Screen
-app.get('/api/oauth/sandbox-consent', (req: Request, res: Response) => {
-  const { platform, state, workspaceId } = req.query;
-  const mockCode = `auth_code_${Date.now()}`;
-  const callbackUrl = `/api/oauth/${platform}/callback?code=${mockCode}&state=${state}`;
-
-  const platformNames: Record<string, string> = {
-    twitter: 'X (Twitter)',
-    instagram: 'Instagram Creator',
-    facebook: 'Facebook Pages',
-    linkedin: 'LinkedIn Share',
-    youtube: 'YouTube Data API',
-  };
-
-  const name = platformNames[String(platform)] || 'Social Platform';
-
-  res.send(`
-    <!DOCTYPE html>
-    <html lang="en">
-      <head>
-        <meta charset="UTF-8" />
-        <title>Connect ${name} | OmniPost OAuth 2.0</title>
-        <style>
-          body { background: #09090b; color: #f4f4f5; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; display: flex; align-items: center; justify-content: center; height: 100vh; margin: 0; }
-          .card { background: #18181b; border: 1px solid #27272a; border-radius: 16px; padding: 32px; max-width: 440px; width: 90%; text-align: center; box-shadow: 0 20px 40px rgba(0,0,0,0.5); }
-          h2 { margin: 0 0 12px; font-size: 20px; font-weight: 600; }
-          p { color: #a1a1aa; font-size: 14px; line-height: 1.5; margin-bottom: 24px; }
-          .badge { display: inline-block; background: #27272a; color: #38bdf8; padding: 4px 10px; border-radius: 999px; font-size: 12px; font-family: monospace; margin-bottom: 16px; }
-          .btn-primary { background: #3b82f6; color: #fff; text-decoration: none; padding: 12px 24px; border-radius: 10px; font-weight: 600; display: block; margin-bottom: 12px; transition: background 0.2s; }
-          .btn-primary:hover { background: #2563eb; }
-          .btn-cancel { color: #71717a; text-decoration: none; font-size: 13px; }
-          .btn-cancel:hover { color: #d4d4d8; }
-        </style>
-      </head>
-      <body>
-        <div class="card">
-          <div class="badge">OAuth 2.0 PKCE Verification</div>
-          <h2>Authorize OmniPost for ${name}</h2>
-          <p>OmniPost is requesting permission to publish posts, analyze engagements, and read basic channel profile information for your workspace.</p>
-          <a href="${callbackUrl}" class="btn-primary">Authorize & Connect Account</a>
-          <a href="/?oauth_cancelled=true" class="btn-cancel">Cancel and return to dashboard</a>
-        </div>
-      </body>
-    </html>
-  `);
 });
 
 // ==========================================
