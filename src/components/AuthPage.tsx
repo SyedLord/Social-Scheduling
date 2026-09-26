@@ -93,8 +93,8 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onLoginSuccess }) => {
       setErrorMsg('Please provide a valid work email address');
       return;
     }
-    if (!signupPassword || signupPassword.length < 6) {
-      setErrorMsg('Password must be at least 6 characters long');
+    if (!signupPassword || signupPassword.length < 8) {
+      setErrorMsg('Password must be at least 8 characters long');
       return;
     }
     if (signupPassword !== signupConfirmPassword) {
@@ -357,7 +357,7 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onLoginSuccess }) => {
                         type={showSignupPassword ? 'text' : 'password'}
                         value={signupPassword}
                         onChange={(e) => setSignupPassword(e.target.value)}
-                        placeholder="Min 6 chars"
+                        placeholder="At least 8 chars"
                         required
                         className="w-full pl-9 pr-8 py-2.5 rounded-xl bg-zinc-950 border border-zinc-800 focus:border-blue-500 focus:ring-1 focus:ring-blue-500 text-zinc-100 placeholder-zinc-500 text-xs transition-colors"
                       />
@@ -424,7 +424,7 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onLoginSuccess }) => {
           {/* Security & Multi-tenant note */}
           <div className="text-center mt-4 text-[11px] text-zinc-500 flex items-center justify-center gap-1.5">
             <Lock className="w-3 h-3 text-zinc-600" />
-            <span>Encrypted authentication session & multi-tenant workspace isolation</span>
+            <span>Email and password authentication powered by Supabase</span>
           </div>
         </div>
       </main>
