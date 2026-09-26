@@ -53,8 +53,7 @@ CREATE TABLE IF NOT EXISTS users (
     password_hash TEXT,
     avatar_url TEXT,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    is_locked BOOLEAN NOT NULL DEFAULT FALSE
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 
@@ -85,7 +84,8 @@ CREATE TABLE IF NOT EXISTS workspaces (
     owner_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     settings JSONB NOT NULL DEFAULT '{"timezone": "UTC", "max_accounts": 3, "max_scheduled_posts": 10}',
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    is_locked BOOLEAN NOT NULL DEFAULT FALSE
 );
 
 -- 5. WORKSPACE MEMBERS TABLE (RBAC)
