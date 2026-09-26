@@ -385,6 +385,9 @@ app.get('/api/oauth/:platform/authorize', (req: Request, res: Response) => {
     req.get('host')
   );
 
+  if (!authData.url) {
+    return res.status(503).json({ error: `Live OAuth credentials are not configured for ${platform}.` });
+  }
   res.json(authData);
 });
 
