@@ -471,11 +471,12 @@ class DatabaseManager {
     }
 
     try {
-      const [users, workspaces, license_keys, workspace_members, workspace_accounts, posts, post_analytics, dispatch_logs] =
+      const [users, passwords, workspaces, licenses, members, accounts, posts, analytics, logs] =
         await Promise.all([
           readTable<any>('users'),
+          readTable<any>('app_passwords'),
           readTable<any>('workspaces'),
-          readTable<any>('license_keys'),
+          readTable<any>('licenses'),
           readTable<any>('workspace_members'),
           readTable<any>('workspace_accounts'),
           readTable<any>('posts'),
@@ -483,23 +484,106 @@ class DatabaseManager {
           readTable<any>('dispatch_logs'),
         ]);
 
-      if (users.length > 0) {
-        this.data = {
-          users: users.map((u: any) => ({ ...u, password: undefined })),
-          workspaces,
-          license_keys,
-          workspace_members,
-          workspace_accounts,
-          posts,
-          post_analytics,
-          dispatch_logs,
-        };
-        return;
+      const passwordMap = new Map(passwords.map((p: any) => [p.user_id, p.password_hash]));
+      this.data = {
+        users: users.map((u: any) => ({
+          id: u.id,
+          email: u.email || '',
+          name: u.display_name || '',
+          role: u.role === 'admin' ? 'admin' : 'user',
+          avatar_url: undefined,
+          active_license_id: u.active_license_key || undefined,
+          created_at: u.created_at || new Date().toISOString(),
+          password_hash: passwordMap.get(u.id),
+        })) as any,
+        workspaces: workspaces.map((w: any) => ({
+          id: w.id,
+          name: w.name,
+          slug: w.slug || w.id,
+          plan: ['free','pro','enterprise'].includes(w.plan) ? w.plan : 'free',
+          owner_id: w.user_id,
+          is_locked: Boolean(w.is_locked),
+          settings: w.settings || {},
+          created_at: w.created_at,
+          updated_at: w.updated_at || w.created_at,
+        })),
+        license_keys: licenses.map((l: any) => ({
+          id: l.id,
+          key: l.key,
+          label: l.key,
+          max_workspaces: l.max_workspaces || 1,
+          validity_days: l.duration_in_days || 30,
+          created_at: l.created_at,
+          activated_at: l.activated_at || undefined,
+          expires_at: l.expires_at || undefined,
+          is_redeemed: Boolean(l.assigned_to_user_id),
+          redeemed_by_user_id: l.assigned_to_user_id || undefined,
+          is_revoked: l.status === 'revoked',
+          revoked_at: undefined,
+          status: l.status === 'revoked' ? 'revoked' : (l.expires_at && new Date(l.expires_at) < new Date() ? 'expired' : (l.assigned_to_user_id ? 'active' : 'available')),
+        })),
+        workspace_members: members.map((m: any) => ({
+          id: m.id,
+          workspace_id: m.workspace_id,
+          user_id: m.user_id,
+          role: m.role,
+          joined_at: m.joined_at,
+        })),
+        workspace_accounts: accounts.map((a: any) => ({
+          id: a.id,
+          workspace_id: a.workspace_id,
+          platform: a.provider,
+          platform_account_id: a.platform_account_id || a.account_id || a.id,
+          account_name: a.account_name,
+          account_handle: a.account_handle || a.account_id || a.account_name,
+          account_avatar: undefined,
+          is_active: Boolean(a.is_connected),
+          status: a.status || (a.is_connected ? 'active' : 'revoked'),
+          token_expires_at: a.token_expires_at || undefined,
+          metadata: a.metadata || {},
+          last_synced_at: a.last_synced_at || undefined,
+          created_at: a.created_at,
+          updated_at: a.updated_at,
+          access_token_enc: a.access_token,
+          refresh_token_enc: a.refresh_token,
+        })),
+        posts: posts.map((p: any) => ({
+          id: p.id,
+          workspace_id: p.workspace_id,
+          author_id: p.author_id || undefined,
+          content: p.content || '',
+          media_urls: p.media_urls || [],
+          media_type: p.media_type || 'none',
+          target_platforms: p.platforms || [],
+          target_account_ids: p.target_account_ids || [],
+          status: p.status || 'draft',
+          scheduled_at: p.scheduled_time || undefined,
+          published_at: p.published_at || undefined,
+          error_message: p.error_message || undefined,
+          error_details: p.error_details || undefined,
+          platform_post_ids: p.platform_post_ids || {},
+          created_at: p.created_at,
+          updated_at: p.updated_at || p.created_at,
+        })),
+        post_analytics: analytics.map((a: any) => ({ ...a })),
+        dispatch_logs: logs.map((l: any) => ({ ...l })),
+      };
+
+      // Only seed an actually empty application database. Existing Supabase users/data are never replaced.
+      if (users.length === 0 && workspaces.length === 0 && licenses.length === 0) {
+        const seed = getInitialSeed();
+        seed.users = seed.users.map((u: any) => ({ ...u, id: crypto.randomUUID() }));
+        seed.workspaces = [];
+        seed.workspace_members = [];
+        seed.workspace_accounts = [];
+        seed.posts = [];
+        seed.post_analytics = [];
+        seed.dispatch_logs = [];
+        this.data = seed;
+        await this.persistToSupabase(seed);
       }
 
-      // Empty Supabase project: seed only the non-sensitive demo/license data.
-      await this.persistToSupabase(this.data);
-      console.log('[OmniPost] Supabase database initialized with application seed data.');
+      console.log(`[OmniPost] Loaded Supabase backend: ${this.data.users.length} users, ${this.data.workspaces.length} workspaces, ${this.data.posts.length} posts.`);
     } catch (error) {
       console.error('[OmniPost] Supabase initialization failed:', error);
       throw error;
@@ -509,33 +593,112 @@ class DatabaseManager {
   private async persistToSupabase(snapshot: DatabaseSchema): Promise<void> {
     if (!isSupabaseConfigured()) return;
 
-    const users = snapshot.users.map(({ password, password_hash, ...u }: any) => ({
-      ...u,
-      password_hash: password_hash || (password ? hashPassword(password) : null),
+    const users = snapshot.users.map((u: any) => ({
+      id: u.id,
+      email: u.email,
+      display_name: u.name,
+      role: u.role,
+      active_license_key: u.active_license_id || null,
+      max_workspaces: 0,
+      created_at: u.created_at,
     }));
 
-    // Delete children first, then rebuild the small application cache.
+    const passwords = snapshot.users
+      .filter((u: any) => u.password_hash || u.password)
+      .map((u: any) => ({
+        user_id: u.id,
+        password_hash: u.password_hash || hashPassword(u.password),
+        updated_at: new Date().toISOString(),
+      }));
+
+    const licenses = snapshot.license_keys.map((l: any) => ({
+      id: l.id,
+      key: l.key,
+      duration_in_days: l.validity_days,
+      status: l.is_revoked ? 'revoked' : l.status,
+      assigned_to_user_id: l.redeemed_by_user_id || null,
+      created_at: l.created_at,
+      activated_at: l.activated_at || null,
+      expires_at: l.expires_at || null,
+      max_workspaces: l.max_workspaces,
+    }));
+
+    const workspaces = snapshot.workspaces.map((w: any) => ({
+      id: w.id,
+      name: w.name,
+      slug: w.slug,
+      user_id: w.owner_id,
+      is_locked: Boolean(w.is_locked),
+      connected_accounts: [],
+      plan: w.plan,
+      settings: w.settings || {},
+      created_at: w.created_at,
+      updated_at: w.updated_at,
+    }));
+
+    const members = snapshot.workspace_members.map((m: any) => ({
+      id: m.id,
+      workspace_id: m.workspace_id,
+      user_id: m.user_id,
+      role: m.role,
+      joined_at: m.joined_at,
+    }));
+
+    const accounts = snapshot.workspace_accounts.map((a: any) => ({
+      id: a.id,
+      workspace_id: a.workspace_id,
+      provider: a.platform,
+      account_name: a.account_name,
+      account_id: a.platform_account_id,
+      platform_account_id: a.platform_account_id,
+      account_handle: a.account_handle,
+      access_token: a.access_token_enc || null,
+      refresh_token: a.refresh_token_enc || null,
+      token_expires_at: a.token_expires_at || null,
+      is_connected: Boolean(a.is_active),
+      status: a.status,
+      metadata: a.metadata || {},
+      last_synced_at: a.last_synced_at || null,
+      created_at: a.created_at,
+      updated_at: a.updated_at,
+    }));
+
+    const posts = snapshot.posts.map((p: any) => ({
+      id: p.id,
+      workspace_id: p.workspace_id,
+      author_id: p.author_id || null,
+      content: p.content,
+      scheduled_time: p.scheduled_at || null,
+      status: p.status,
+      media_urls: p.media_urls || [],
+      platforms: p.target_platforms || [],
+      target_account_ids: p.target_account_ids || [],
+      media_type: p.media_type || 'none',
+      published_at: p.published_at || null,
+      error_message: p.error_message || null,
+      error_details: p.error_details || null,
+      platform_post_ids: p.platform_post_ids || {},
+      created_at: p.created_at,
+      updated_at: p.updated_at,
+    }));
+
     await replaceRows('post_analytics', []);
     await replaceRows('dispatch_logs', []);
     await replaceRows('posts', []);
     await replaceRows('workspace_accounts', []);
     await replaceRows('workspace_members', []);
-    await replaceRows('license_keys', []);
+    await replaceRows('licenses', []);
     await replaceRows('workspaces', []);
+    await replaceRows('app_passwords', []);
     await replaceRows('users', []);
 
     await replaceRows('users', users);
-    await replaceRows('license_keys', snapshot.license_keys);
-    await replaceRows('workspaces', snapshot.workspaces);
-    await replaceRows('workspace_members', snapshot.workspace_members.map((m: any) => {
-      const { user, ...row } = m;
-      return row;
-    }));
-    await replaceRows('workspace_accounts', snapshot.workspace_accounts);
-    await replaceRows('posts', snapshot.posts.map((p: any) => {
-      const { author_name, analytics, ...row } = p;
-      return row;
-    }));
+    await replaceRows('app_passwords', passwords);
+    await replaceRows('licenses', licenses);
+    await replaceRows('workspaces', workspaces);
+    await replaceRows('workspace_members', members);
+    await replaceRows('workspace_accounts', accounts);
+    await replaceRows('posts', posts);
     await replaceRows('post_analytics', snapshot.post_analytics);
     await replaceRows('dispatch_logs', snapshot.dispatch_logs);
   }
@@ -583,7 +746,7 @@ class DatabaseManager {
     if (!user) {
       return { error: 'Account not found with this email address' };
     }
-    if (password && ((user.password && !verifyPassword(password, user.password)) || (user.password_hash && !verifyPassword(password, user.password_hash)))) {
+    if (password && !verifyPassword(password, (user as any).password_hash || user.password || '')) {
       return { error: 'Invalid password. Please check your credentials.' };
     }
     const { password: _, password_hash: __, ...cleanUser } = user as any;
@@ -597,11 +760,11 @@ class DatabaseManager {
     }
     const assignedRole: 'admin' | 'user' = 'user';
     const newUser: User = {
-      id: `usr_${crypto.randomBytes(6).toString('hex')}`,
+      id: crypto.randomUUID(),
       email: normalizedEmail,
       name: name.trim(),
       role: assignedRole,
-      password: hashPassword(password),
+      password_hash: hashPassword(password),
       created_at: new Date().toISOString(),
     };
     this.data.users.push(newUser);
