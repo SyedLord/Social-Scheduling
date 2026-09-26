@@ -37,7 +37,6 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onLoginSuccess }) => {
   const [signupPassword, setSignupPassword] = useState('');
   const [signupConfirmPassword, setSignupConfirmPassword] = useState('');
   const [showSignupPassword, setShowSignupPassword] = useState(false);
-  const [signupRole, setSignupRole] = useState<'user' | 'admin'>('user');
   const [agreeTerms, setAgreeTerms] = useState(true);
 
   // UI state
@@ -147,7 +146,6 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onLoginSuccess }) => {
           name: signupName.trim(),
           email: signupEmail.trim(),
           password: signupPassword,
-          role: signupRole,
         }),
       });
       const data = await res.json();
@@ -414,43 +412,6 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onLoginSuccess }) => {
                         className="w-full pl-9 pr-3.5 py-2.5 rounded-xl bg-zinc-950 border border-zinc-800 focus:border-blue-500 focus:ring-1 focus:ring-blue-500 text-zinc-100 placeholder-zinc-500 text-xs transition-colors"
                       />
                     </div>
-                  </div>
-                </div>
-
-                <div>
-                  <label className="block text-xs font-medium text-zinc-300 mb-1.5">Account Role</label>
-                  <div className="grid grid-cols-2 gap-2">
-                    <button
-                      type="button"
-                      onClick={() => setSignupRole('user')}
-                      className={`p-2.5 rounded-xl border text-left transition-all ${
-                        signupRole === 'user'
-                          ? 'border-blue-500/60 bg-blue-500/10 text-white'
-                          : 'border-zinc-800 bg-zinc-950/60 text-zinc-400 hover:border-zinc-700'
-                      }`}
-                    >
-                      <div className="text-xs font-semibold flex items-center gap-1.5">
-                        <UserIcon className="w-3.5 h-3.5 text-blue-400" />
-                        <span>Client / Creator</span>
-                      </div>
-                      <div className="text-[10px] text-zinc-400 mt-0.5">Workspace publisher</div>
-                    </button>
-
-                    <button
-                      type="button"
-                      onClick={() => setSignupRole('admin')}
-                      className={`p-2.5 rounded-xl border text-left transition-all ${
-                        signupRole === 'admin'
-                          ? 'border-amber-500/60 bg-amber-500/10 text-white'
-                          : 'border-zinc-800 bg-zinc-950/60 text-zinc-400 hover:border-zinc-700'
-                      }`}
-                    >
-                      <div className="text-xs font-semibold flex items-center gap-1.5">
-                        <ShieldCheck className="w-3.5 h-3.5 text-amber-400" />
-                        <span>Administrator</span>
-                      </div>
-                      <div className="text-[10px] text-zinc-400 mt-0.5">Key management & oversight</div>
-                    </button>
                   </div>
                 </div>
 
