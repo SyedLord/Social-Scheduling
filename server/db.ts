@@ -774,7 +774,7 @@ class DatabaseManager {
       return { error: 'An account with this email already exists' };
     }
 
-    let userId = crypto.randomUUID();
+    let userId: string = crypto.randomUUID();
 
     // Create the identity in Supabase Auth when the project is configured.
     // The public.users row is then keyed by the Auth user UUID.
