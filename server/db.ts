@@ -1,7 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
-import { isSupabaseConfigured, readTable, replaceRows } from './supabase.js';
+import { getSupabase, isSupabaseConfigured, readTable, replaceRows } from './supabase.js';
 import {
   User,
   UserRole,
@@ -741,32 +741,65 @@ class DatabaseManager {
     return this.data.users.find((u) => u.email.toLowerCase() === email.trim().toLowerCase());
   }
 
-  public authenticate(email: string, password?: string): { user?: User; error?: string } {
+  public async authenticate(email: string, password?: string): Promise<{ user?: User; error?: string }> {
     const user = this.getUserByEmail(email) as (User & { password_hash?: string }) | undefined;
     if (!user) {
       return { error: 'Account not found with this email address' };
     }
-    if (password && !verifyPassword(password, (user as any).password_hash || user.password || '')) {
-      return { error: 'Invalid password. Please check your credentials.' };
+
+    if (password) {
+      const localHash = (user as any).password_hash || user.password;
+      let valid = localHash ? verifyPassword(password, localHash) : false;
+
+      // Existing users in this Supabase project are linked to Supabase Auth.
+      // Prefer Auth validation when no application password hash exists.
+      if (!valid && isSupabaseConfigured() && !localHash) {
+        const { error } = await getSupabase().auth.signInWithPassword({
+          email: email.trim().toLowerCase(),
+          password,
+        });
+        valid = !error;
+      }
+
+      if (!valid) return { error: 'Invalid password. Please check your credentials.' };
     }
+
     const { password: _, password_hash: __, ...cleanUser } = user as any;
     return { user: cleanUser as User };
   }
 
-  public registerUser(name: string, email: string, password: string = 'user123', _role?: 'admin' | 'user'): { user?: User; error?: string } {
+  public async registerUser(name: string, email: string, password: string = 'user123', _role?: 'admin' | 'user'): Promise<{ user?: User; error?: string }> {
     const normalizedEmail = email.trim().toLowerCase();
     if (this.getUserByEmail(normalizedEmail)) {
       return { error: 'An account with this email already exists' };
     }
-    const assignedRole: 'admin' | 'user' = 'user';
-    const newUser: User = {
-      id: crypto.randomUUID(),
+
+    let userId = crypto.randomUUID();
+
+    // Create the identity in Supabase Auth when the project is configured.
+    // The public.users row is then keyed by the Auth user UUID.
+    if (isSupabaseConfigured()) {
+      const { data, error } = await getSupabase().auth.admin.createUser({
+        email: normalizedEmail,
+        password,
+        email_confirm: true,
+        user_metadata: { display_name: name.trim() },
+      });
+      if (error || !data.user) {
+        return { error: error?.message || 'Unable to create authentication account' };
+      }
+      userId = data.user.id;
+    }
+
+    const newUser: any = {
+      id: userId,
       email: normalizedEmail,
       name: name.trim(),
-      role: assignedRole,
+      role: 'user',
       password_hash: hashPassword(password),
       created_at: new Date().toISOString(),
     };
+
     this.data.users.push(newUser);
     this.save();
     const { password: _, password_hash: __, ...clean } = newUser as any;
