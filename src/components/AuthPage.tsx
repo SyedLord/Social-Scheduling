@@ -1,6 +1,5 @@
 import React, { useState } from 'react';
 import {
-  ShieldCheck,
   User as UserIcon,
   Lock,
   Mail,
@@ -43,33 +42,6 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onLoginSuccess }) => {
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
-
-  // Quick Account Login handler
-  const handleQuickLogin = async (email: string, pass: string) => {
-    setIsLoading(true);
-    setErrorMsg(null);
-    setSuccessMsg(null);
-    try {
-      const res = await fetch('/api/auth/login', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email: email.trim(), password: pass }),
-      });
-      const data = await res.json();
-      if (!res.ok || data.error) {
-        setErrorMsg(data.error || 'Failed to authenticate');
-        return;
-      }
-      setSuccessMsg(`Welcome back, ${data.user.name}!`);
-      setTimeout(() => {
-        onLoginSuccess(data.user);
-      }, 300);
-    } catch (err: any) {
-      setErrorMsg(err.message || 'Network error signing in');
-    } finally {
-      setIsLoading(false);
-    }
-  };
 
   // Sign In Form submission
   const handleSignInSubmit = async (e: React.FormEvent) => {
@@ -291,7 +263,7 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onLoginSuccess }) => {
                 <div>
                   <div className="flex items-center justify-between mb-1.5">
                     <label className="block text-xs font-medium text-zinc-300">Password</label>
-                    <span className="text-[11px] text-zinc-500">Default demo: admin123 / user123</span>
+                    
                   </div>
                   <div className="relative">
                     <Lock className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-zinc-500" />
@@ -446,60 +418,7 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onLoginSuccess }) => {
               </form>
             )}
 
-            {/* DIVIDER */}
-            <div className="relative my-6 text-center">
-              <div className="absolute inset-0 flex items-center">
-                <div className="w-full border-t border-zinc-800" />
-              </div>
-              <div className="relative inline-block px-3 bg-zinc-900 text-[10px] uppercase font-bold tracking-wider text-zinc-500">
-                Fast Demo Access
-              </div>
-            </div>
 
-            {/* QUICK ONE-CLICK TEST LOGINS */}
-            <div className="space-y-2">
-              <div className="text-[11px] text-zinc-400 text-center mb-2">
-                Click any pre-configured demo account to sign in instantly:
-              </div>
-
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                {/* Admin Quick Login Button */}
-                <button
-                  type="button"
-                  disabled={isLoading}
-                  onClick={() => handleQuickLogin('admin@omnipost.io', 'admin123')}
-                  className="p-3 rounded-xl border border-zinc-800 hover:border-amber-500/40 bg-zinc-950/80 hover:bg-zinc-800/60 text-left transition-all flex items-start gap-2.5 group"
-                >
-                  <div className="w-7 h-7 rounded-lg bg-amber-500/10 border border-amber-500/20 flex items-center justify-center text-amber-400 shrink-0 group-hover:scale-105 transition-transform">
-                    <ShieldCheck className="w-4 h-4" />
-                  </div>
-                  <div className="truncate">
-                    <div className="text-xs font-semibold text-zinc-200 group-hover:text-amber-300 transition-colors flex items-center gap-1">
-                      <span>Admin Login</span>
-                    </div>
-                    <div className="text-[10px] text-zinc-400 font-mono truncate">admin@omnipost.io</div>
-                  </div>
-                </button>
-
-                {/* Standard User Quick Login Button */}
-                <button
-                  type="button"
-                  disabled={isLoading}
-                  onClick={() => handleQuickLogin('user@omnipost.io', 'user123')}
-                  className="p-3 rounded-xl border border-zinc-800 hover:border-blue-500/40 bg-zinc-950/80 hover:bg-zinc-800/60 text-left transition-all flex items-start gap-2.5 group"
-                >
-                  <div className="w-7 h-7 rounded-lg bg-blue-500/10 border border-blue-500/20 flex items-center justify-center text-blue-400 shrink-0 group-hover:scale-105 transition-transform">
-                    <UserIcon className="w-4 h-4" />
-                  </div>
-                  <div className="truncate">
-                    <div className="text-xs font-semibold text-zinc-200 group-hover:text-blue-300 transition-colors flex items-center gap-1">
-                      <span>User Login</span>
-                    </div>
-                    <div className="text-[10px] text-zinc-400 font-mono truncate">user@omnipost.io</div>
-                  </div>
-                </button>
-              </div>
-            </div>
           </div>
 
           {/* Security & Multi-tenant note */}
