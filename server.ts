@@ -192,23 +192,8 @@ app.get('/api/workspaces/:id/accounts', (req: Request, res: Response) => {
   res.json(accounts);
 });
 
-app.post('/api/workspaces/:id/accounts/sandbox-connect', (req: Request, res: Response) => {
-  const ws = db.getWorkspaceById(req.params.id);
-  if (!ws) return res.status(404).json({ error: 'Workspace not found' });
-  if (ws.is_locked) {
-    return res.status(403).json({ error: 'This workspace is locked under current license quotas. Unlock it or upgrade your license key to connect accounts.' });
-  }
-
-  const { platform, handle } = req.body;
-  if (!['twitter', 'instagram', 'facebook', 'linkedin', 'youtube'].includes(platform)) {
-    return res.status(400).json({ error: 'Invalid platform' });
-  }
-  const result = oauthService.connectSandboxAccount(platform as SocialPlatform, req.params.id, handle);
-  if (!result.success) {
-    return res.status(400).json({ error: result.error });
-  }
-  const accounts = db.getAccounts(req.params.id);
-  res.status(201).json({ success: true, accounts });
+app.post('/api/workspaces/:id/accounts/sandbox-connect', (_req: Request, res: Response) => {
+  res.status(410).json({ error: 'Sandbox account linking has been removed. Connect through official provider OAuth.' });
 });
 
 app.delete('/api/workspaces/:id/accounts/:accId', (req: Request, res: Response) => {
