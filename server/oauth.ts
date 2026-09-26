@@ -48,6 +48,19 @@ export class OAuthService {
     return 'http://localhost:3000';
   }
 
+  private isPlatformConfigured(platform: SocialPlatform): boolean {
+    const hasTokenKey = Boolean(process.env.SOCIAL_TOKEN_ENCRYPTION_KEY);
+    if (!hasTokenKey) return false;
+    switch (platform) {
+      case 'twitter': return Boolean(process.env.TWITTER_CLIENT_ID && process.env.TWITTER_CLIENT_SECRET);
+      case 'instagram':
+      case 'facebook': return Boolean(process.env.META_APP_ID && process.env.META_APP_SECRET);
+      case 'linkedin': return Boolean(process.env.LINKEDIN_CLIENT_ID && process.env.LINKEDIN_CLIENT_SECRET);
+      case 'youtube': return Boolean(process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET);
+      default: return false;
+    }
+  }
+
   // Generate authorization URL and store PKCE / state
   public generateAuthUrl(
     platform: SocialPlatform,
@@ -55,6 +68,9 @@ export class OAuthService {
     reqProtocol?: string,
     reqHost?: string
   ): { url: string; state: string; isLiveConfigured: boolean; platform: SocialPlatform } {
+    if (!this.isPlatformConfigured(platform)) {
+      return { url: '', state: '', isLiveConfigured: false, platform };
+    }
     cleanupExpiredSessions();
     const state = `st_${platform}_${crypto.randomBytes(16).toString('hex')}`;
     const codeVerifier = base64URLEncode(crypto.randomBytes(32));
@@ -106,7 +122,7 @@ export class OAuthService {
             response_type: 'code',
             state,
           });
-          url = `https://www.facebook.com/v19.0/dialog/oauth?${params.toString()}`;
+          url = `https://www.facebook.com/v26.0/dialog/oauth?${params.toString()}`;
         } else {
           url = '';
         }
@@ -124,7 +140,7 @@ export class OAuthService {
             response_type: 'code',
             state,
           });
-          url = `https://www.facebook.com/v19.0/dialog/oauth?${params.toString()}`;
+          url = `https://www.facebook.com/v26.0/dialog/oauth?${params.toString()}`;
         } else {
           url = '';
         }
@@ -247,7 +263,8 @@ export class OAuthService {
     });
     const userData = await userRes.json();
 
-    const twitterUser = userData.data || { id: 'tw_' + Date.now(), name: 'Twitter Creator', username: 'creator' };
+    if (!userRes.ok || !userData.data?.id || !userData.data?.username) throw new Error(userData.detail || 'Could not read the authenticated X account profile.');
+    const twitterUser = userData.data;
     const expiresAt = new Date(Date.now() + (tokenData.expires_in || 7200) * 1000).toISOString();
 
     const result = db.addAccount({
@@ -261,8 +278,7 @@ export class OAuthService {
       access_token_enc: tokenData.access_token,
       refresh_token_enc: tokenData.refresh_token,
       metadata: {
-        follower_count: twitterUser.public_metrics?.followers_count || 1200,
-        verified: true,
+        follower_count: twitterUser.public_metrics?.followers_count ?? 0,
       },
     });
 
@@ -281,7 +297,7 @@ export class OAuthService {
     const appSecret = process.env.META_APP_SECRET!;
 
     // 1. Get short-lived user token
-    const tokenUrl = `https://graph.facebook.com/v19.0/oauth/access_token?client_id=${appId}&redirect_uri=${encodeURIComponent(
+    const tokenUrl = `https://graph.facebook.com/v26.0/oauth/access_token?client_id=${appId}&redirect_uri=${encodeURIComponent(
       redirectUri
     )}&client_secret=${appSecret}&code=${code}`;
 
@@ -292,17 +308,19 @@ export class OAuthService {
     }
 
     // 2. Exchange for 60-day long-lived token
-    const longLivedUrl = `https://graph.facebook.com/v19.0/oauth/access_token?grant_type=fb_exchange_token&client_id=${appId}&client_secret=${appSecret}&fb_exchange_token=${data.access_token}`;
+    const longLivedUrl = `https://graph.facebook.com/v26.0/oauth/access_token?grant_type=fb_exchange_token&client_id=${appId}&client_secret=${appSecret}&fb_exchange_token=${data.access_token}`;
     const llRes = await fetch(longLivedUrl);
     const llData = await llRes.json();
-    const longLivedToken = llData.access_token || data.access_token;
+    if (!llRes.ok || !llData.access_token) throw new Error(llData.error?.message || 'Meta long-lived token exchange failed.');
+    const longLivedToken = llData.access_token;
     const expiresAt = new Date(Date.now() + (llData.expires_in || 5184000) * 1000).toISOString();
 
     if (platform === 'facebook') {
       // Get pages
-      const pagesRes = await fetch(`https://graph.facebook.com/v19.0/me/accounts?fields=id,name,picture,access_token,category&access_token=${longLivedToken}`);
+      const pagesRes = await fetch(`https://graph.facebook.com/v26.0/me/accounts?fields=id,name,picture,access_token,category&access_token=${longLivedToken}`);
       const pagesData = await pagesRes.json();
-      const page = pagesData.data?.[0] || { id: 'fb_page_live_' + Date.now(), name: 'Meta Business Page', category: 'Brand' };
+      if (!pagesRes.ok || !Array.isArray(pagesData.data) || pagesData.data.length === 0) throw new Error(pagesData.error?.message || 'No Facebook Pages were returned for this account.');
+      const page = pagesData.data[0];
 
       const result = db.addAccount({
         workspace_id: workspaceId,
@@ -319,9 +337,11 @@ export class OAuthService {
       return { success: true, accountId: result.account?.id };
     } else {
       // Instagram: Fetch connected IG business account
-      const igRes = await fetch(`https://graph.facebook.com/v19.0/me/accounts?fields=instagram_business_account{id,username,profile_picture_url,followers_count}&access_token=${longLivedToken}`);
+      const igRes = await fetch(`https://graph.facebook.com/v26.0/me/accounts?fields=instagram_business_account{id,username,profile_picture_url,followers_count}&access_token=${longLivedToken}`);
       const igData = await igRes.json();
-      const igAcc = igData.data?.[0]?.instagram_business_account || { id: 'ig_biz_' + Date.now(), username: 'ig_creator', followers_count: 5400 };
+      if (!igRes.ok) throw new Error(igData.error?.message || 'Could not list Facebook Pages for Instagram connection.');
+      const igAcc = igData.data?.find((entry: any) => entry.instagram_business_account)?.instagram_business_account;
+      if (!igAcc?.id || !igAcc?.username) throw new Error('No eligible Instagram professional account linked to a Facebook Page was found.');
 
       const result = db.addAccount({
         workspace_id: workspaceId,
@@ -332,7 +352,7 @@ export class OAuthService {
         account_avatar: igAcc.profile_picture_url || 'https://images.unsplash.com/photo-1579783902614-a3fb3927b675?w=150&auto=format&fit=crop&q=80',
         token_expires_at: expiresAt,
         access_token_enc: longLivedToken,
-        metadata: { follower_count: igAcc.followers_count || 10000, verified: true },
+        metadata: { follower_count: igAcc.followers_count ?? 0 },
       });
       if (result.error) return { success: false, error: result.error };
       return { success: true, accountId: result.account?.id };
@@ -364,19 +384,20 @@ export class OAuthService {
       headers: { Authorization: `Bearer ${data.access_token}` },
     });
     const userData = await userRes.json();
+    if (!userRes.ok || !userData.sub || !userData.name) throw new Error(userData.message || 'Could not read the authenticated LinkedIn profile.');
 
     const expiresAt = new Date(Date.now() + (data.expires_in || 5184000) * 1000).toISOString();
     const result = db.addAccount({
       workspace_id: workspaceId,
       platform: 'linkedin',
-      platform_account_id: userData.sub || `li_${Date.now()}`,
-      account_name: userData.name || 'LinkedIn Professional',
-      account_handle: userData.email ? `in/${userData.email.split('@')[0]}` : 'in/creator',
-      account_avatar: userData.picture || 'https://images.unsplash.com/photo-1560179707-f14e90ef3623?w=150&auto=format&fit=crop&q=80',
+      platform_account_id: userData.sub,
+      account_name: userData.name,
+      account_handle: userData.sub,
+      account_avatar: userData.picture,
       token_expires_at: expiresAt,
       access_token_enc: data.access_token,
       refresh_token_enc: data.refresh_token,
-      metadata: { follower_count: 8500, category: 'Professional Services' },
+      metadata: {},
     });
 
     if (result.error) return { success: false, error: result.error };
@@ -409,11 +430,8 @@ export class OAuthService {
       { headers: { Authorization: `Bearer ${data.access_token}` } }
     );
     const chData = await chRes.json();
-    const channel = chData.items?.[0] || {
-      id: 'yt_ch_' + Date.now(),
-      snippet: { title: 'YouTube Creator Channel', thumbnails: { default: { url: 'https://images.unsplash.com/photo-1611162617213-7d7a39e9b1d7?w=150&auto=format&fit=crop&q=80' } } },
-      statistics: { subscriberCount: '15000' },
-    };
+    const channel = chData.items?.[0];
+    if (!chRes.ok || !channel?.id || !channel?.snippet?.title) throw new Error(chData.error?.message || 'No YouTube channel was returned for this Google account.');
 
     const expiresAt = new Date(Date.now() + (data.expires_in || 3600) * 1000).toISOString();
     const result = db.addAccount({
@@ -427,8 +445,7 @@ export class OAuthService {
       access_token_enc: data.access_token,
       refresh_token_enc: data.refresh_token,
       metadata: {
-        subscriber_count: parseInt(channel.statistics.subscriberCount, 10) || 15000,
-        category: 'Entertainment',
+        subscriber_count: Number.parseInt(channel.statistics?.subscriberCount || '0', 10),
       },
     });
 
@@ -436,83 +453,56 @@ export class OAuthService {
     return { success: true, accountId: result.account?.id };
   }
 
-  // High-fidelity Sandbox account linker
-  public connectSandboxAccount(
-    platform: SocialPlatform,
-    workspaceId: string,
-    customHandle?: string
-  ): { success: boolean; accountId?: string; error?: string } {
-    const presets: Record<
-      SocialPlatform,
-      {
-        name: string;
-        handle: string;
-        avatar: string;
-        meta: Record<string, any>;
-      }
-    > = {
-      twitter: {
-        name: 'Brand Studio X',
-        handle: customHandle || '@BrandStudioHQ',
-        avatar: 'https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?w=150&auto=format&fit=crop&q=80',
-        meta: { follower_count: 45800, verified: true, category: 'Tech & Media' },
-      },
-      instagram: {
-        name: 'Omni Visuals Studio',
-        handle: customHandle || '@omnivisualslab',
-        avatar: 'https://images.unsplash.com/photo-1579783902614-a3fb3927b675?w=150&auto=format&fit=crop&q=80',
-        meta: { follower_count: 92400, verified: true, category: 'Creator / Art' },
-      },
-      facebook: {
-        name: 'Omni Media Global',
-        handle: customHandle || 'fb.com/OmniMediaOfficial',
-        avatar: 'https://images.unsplash.com/photo-1557804506-669a67965ba0?w=150&auto=format&fit=crop&q=80',
-        meta: { page_id: 'page_9812736', follower_count: 51200, category: 'Digital Media' },
-      },
-      linkedin: {
-        name: 'Omni Growth Enterprises',
-        handle: customHandle || 'company/omni-growth-enterprises',
-        avatar: 'https://images.unsplash.com/photo-1560179707-f14e90ef3623?w=150&auto=format&fit=crop&q=80',
-        meta: { follower_count: 24500, category: 'Information Technology' },
-      },
-      youtube: {
-        name: 'Omni Tech Studios',
-        handle: customHandle || '@OmniTechStudios',
-        avatar: 'https://images.unsplash.com/photo-1611162617213-7d7a39e9b1d7?w=150&auto=format&fit=crop&q=80',
-        meta: { subscriber_count: 148000, verified: true, category: 'Science & Technology' },
-      },
-    };
-
-    const preset = presets[platform];
-    const expiresAt = new Date(Date.now() + 60 * 86400000).toISOString();
-
-    const result = db.addAccount({
-      workspace_id: workspaceId,
-      platform,
-      platform_account_id: `${platform}_acc_${crypto.randomBytes(4).toString('hex')}`,
-      account_name: preset.name,
-      account_handle: preset.handle,
-      account_avatar: preset.avatar,
-      token_expires_at: expiresAt,
-      metadata: preset.meta,
-      access_token_enc: `mock_access_token_${platform}_${crypto.randomBytes(16).toString('hex')}`,
-      refresh_token_enc: `mock_refresh_token_${platform}_${crypto.randomBytes(16).toString('hex')}`,
-    });
-
-    if (result.error) {
-      return { success: false, error: result.error };
-    }
-    return { success: true, accountId: result.account?.id };
-  }
-
-  // Refresh only after calling the connected provider's real token endpoint.
   public async refreshAccountToken(accountId: string): Promise<{ success: boolean; error?: string }> {
     const account = db.getRawAccount(accountId);
     if (!account) return { success: false, error: 'Account not found' };
-    return {
-      success: false,
-      error: `Automatic token refresh is not configured for ${account.platform}. Reconnect through provider OAuth.`,
-    };
+    const refreshToken = account.refresh_token_enc;
+    if (!refreshToken) return { success: false, error: 'This provider did not issue a refresh token. Reconnect the account.' };
+
+    try {
+      let endpoint = '';
+      let params = new URLSearchParams();
+      const headers: Record<string, string> = { 'Content-Type': 'application/x-www-form-urlencoded' };
+      if (account.platform === 'twitter') {
+        endpoint = 'https://api.x.com/2/oauth2/token';
+        params = new URLSearchParams({ grant_type: 'refresh_token', refresh_token: refreshToken });
+        headers.Authorization = `Basic ${Buffer.from(`${process.env.TWITTER_CLIENT_ID}:${process.env.TWITTER_CLIENT_SECRET}`).toString('base64')}`;
+      } else if (account.platform === 'linkedin') {
+        endpoint = 'https://www.linkedin.com/oauth/v2/accessToken';
+        params = new URLSearchParams({
+          grant_type: 'refresh_token',
+          refresh_token: refreshToken,
+          client_id: process.env.LINKEDIN_CLIENT_ID || '',
+          client_secret: process.env.LINKEDIN_CLIENT_SECRET || '',
+        });
+      } else if (account.platform === 'youtube') {
+        endpoint = 'https://oauth2.googleapis.com/token';
+        params = new URLSearchParams({
+          grant_type: 'refresh_token',
+          refresh_token: refreshToken,
+          client_id: process.env.GOOGLE_CLIENT_ID || '',
+          client_secret: process.env.GOOGLE_CLIENT_SECRET || '',
+        });
+      } else {
+        return { success: false, error: `Automatic refresh is not available for ${account.platform}. Reconnect through provider OAuth.` };
+      }
+
+      const response = await fetch(endpoint, { method: 'POST', headers, body: params.toString() });
+      const data = await response.json();
+      if (!response.ok || !data.access_token) {
+        db.updateAccountTokens(accountId, { status: 'expired' });
+        return { success: false, error: data.error_description || data.error?.message || 'Provider token refresh failed. Reconnect this account.' };
+      }
+      db.updateAccountTokens(accountId, {
+        access_token_enc: data.access_token,
+        refresh_token_enc: data.refresh_token || refreshToken,
+        token_expires_at: new Date(Date.now() + (data.expires_in || 3600) * 1000).toISOString(),
+        status: 'active',
+      });
+      return { success: true };
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : 'Token refresh failed.' };
+    }
   }
 }
 
