@@ -98,7 +98,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
               <h2 className="text-sm font-bold text-zinc-100">
                 {mode === 'switch' ? 'Account Profile' : mode === 'login' ? 'Sign In to OmniPost' : 'Create New Account'}
               </h2>
-              <p className="text-[11px] text-zinc-400">Multi-tenant role & workspace authentication</p>
+              <p className="text-[11px] text-zinc-400">Manage your OmniPost account</p>
             </div>
           </div>
           <button
