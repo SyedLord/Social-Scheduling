@@ -1,6 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
+import { isSupabaseConfigured, readTable, replaceRows } from './supabase.js';
 import {
   User,
   UserRole,
@@ -30,10 +31,18 @@ interface DatabaseSchema {
 const DATA_DIR = path.join(process.cwd(), 'data');
 const DB_FILE = path.join(DATA_DIR, 'omnipost_store.json');
 
-function ensureDirectoryExists(dir: string) {
-  if (!fs.existsSync(dir)) {
-    fs.mkdirSync(dir, { recursive: true });
-  }
+function hashPassword(password: string): string {
+  const salt = crypto.randomBytes(16).toString('hex');
+  const derived = crypto.scryptSync(password, salt, 64).toString('hex');
+  return `scrypt:${salt}:${derived}`;
+}
+
+function verifyPassword(password: string, stored: string): boolean {
+  if (!stored) return false;
+  if (!stored.startsWith('scrypt:')) return stored === password; // legacy in-memory seed only
+  const [, salt, expected] = stored.split(':');
+  const actual = crypto.scryptSync(password, salt, 64).toString('hex');
+  return crypto.timingSafeEqual(Buffer.from(actual, 'hex'), Buffer.from(expected, 'hex'));
 }
 
 // Initial seed data generator
@@ -448,71 +457,111 @@ function getInitialSeed(): DatabaseSchema {
 class DatabaseManager {
   private data: DatabaseSchema;
   private saveTimeout: NodeJS.Timeout | null = null;
+  public readonly ready: Promise<void>;
 
   constructor() {
     this.data = this.loadData();
+    this.ready = this.initializePersistence();
+  }
+
+  private async initializePersistence(): Promise<void> {
+    if (!isSupabaseConfigured()) {
+      console.warn('[OmniPost] Supabase is not configured; using in-memory seed data.');
+      return;
+    }
+
+    try {
+      const [users, workspaces, license_keys, workspace_members, workspace_accounts, posts, post_analytics, dispatch_logs] =
+        await Promise.all([
+          readTable<any>('users'),
+          readTable<any>('workspaces'),
+          readTable<any>('license_keys'),
+          readTable<any>('workspace_members'),
+          readTable<any>('workspace_accounts'),
+          readTable<any>('posts'),
+          readTable<any>('post_analytics'),
+          readTable<any>('dispatch_logs'),
+        ]);
+
+      if (users.length > 0) {
+        this.data = {
+          users: users.map((u: any) => ({ ...u, password: undefined })),
+          workspaces,
+          license_keys,
+          workspace_members,
+          workspace_accounts,
+          posts,
+          post_analytics,
+          dispatch_logs,
+        };
+        return;
+      }
+
+      // Empty Supabase project: seed only the non-sensitive demo/license data.
+      await this.persistToSupabase(this.data);
+      console.log('[OmniPost] Supabase database initialized with application seed data.');
+    } catch (error) {
+      console.error('[OmniPost] Supabase initialization failed:', error);
+      throw error;
+    }
+  }
+
+  private async persistToSupabase(snapshot: DatabaseSchema): Promise<void> {
+    if (!isSupabaseConfigured()) return;
+
+    const users = snapshot.users.map(({ password, ...u }: any) => ({
+      ...u,
+      password_hash: password ? hashPassword(password) : undefined,
+    }));
+
+    // Delete children first, then rebuild the small application cache.
+    await replaceRows('post_analytics', []);
+    await replaceRows('dispatch_logs', []);
+    await replaceRows('posts', []);
+    await replaceRows('workspace_accounts', []);
+    await replaceRows('workspace_members', []);
+    await replaceRows('license_keys', []);
+    await replaceRows('workspaces', []);
+    await replaceRows('users', []);
+
+    await replaceRows('users', users);
+    await replaceRows('license_keys', snapshot.license_keys);
+    await replaceRows('workspaces', snapshot.workspaces);
+    await replaceRows('workspace_members', snapshot.workspace_members.map((m: any) => {
+      const { user, ...row } = m;
+      return row;
+    }));
+    await replaceRows('workspace_accounts', snapshot.workspace_accounts);
+    await replaceRows('posts', snapshot.posts.map((p: any) => {
+      const { author_name, analytics, ...row } = p;
+      return row;
+    }));
+    await replaceRows('post_analytics', snapshot.post_analytics);
+    await replaceRows('dispatch_logs', snapshot.dispatch_logs);
   }
 
   public resetAllData(): DatabaseSchema {
     const seed = getInitialSeed();
     this.data = seed;
-    this.persistSync(seed);
+    this.save();
     return this.data;
   }
 
   private loadData(): DatabaseSchema {
-    const seed = getInitialSeed();
-    try {
-      ensureDirectoryExists(DATA_DIR);
-      if (fs.existsSync(DB_FILE)) {
-        const raw = fs.readFileSync(DB_FILE, 'utf-8');
-        const parsed = JSON.parse(raw);
-        if (parsed.users && Array.isArray(parsed.users)) {
-          if (!parsed.license_keys) parsed.license_keys = seed.license_keys;
-          if (!parsed.workspaces) parsed.workspaces = [];
-          if (!parsed.workspace_members) parsed.workspace_members = [];
-          if (!parsed.workspace_accounts) parsed.workspace_accounts = [];
-          if (!parsed.posts) parsed.posts = [];
-          if (!parsed.post_analytics) parsed.post_analytics = [];
-          if (!parsed.dispatch_logs) parsed.dispatch_logs = [];
-
-          // Ensure admin user exists
-          const hasAdmin = parsed.users.some((u: User) => u.role === 'admin' || u.email === 'admin@omnipost.io');
-          if (!hasAdmin) {
-            parsed.users.unshift(seed.users[0]);
-          }
-          // Ensure client user exists
-          const hasUser = parsed.users.some((u: User) => u.role === 'user');
-          if (!hasUser) {
-            parsed.users.push(seed.users[1] || seed.users[0]);
-          }
-
-          this.persistSync(parsed);
-          return parsed;
-        }
-      }
-    } catch (e) {
-      console.warn('Could not load database file, initializing seed:', e);
-    }
-    this.persistSync(seed);
-    return seed;
+    return getInitialSeed();
   }
 
-  private persistSync(data: DatabaseSchema) {
-    try {
-      ensureDirectoryExists(DATA_DIR);
-      fs.writeFileSync(DB_FILE, JSON.stringify(data, null, 2), 'utf-8');
-    } catch (err) {
-      console.error('Failed to write database file:', err);
-    }
+  private persistSync(_data: DatabaseSchema) {
+    // Supabase is the source of truth. This method remains for backwards compatibility.
   }
 
   public save() {
-    if (this.saveTimeout) {
-      clearTimeout(this.saveTimeout);
-    }
+    if (this.saveTimeout) clearTimeout(this.saveTimeout);
     this.saveTimeout = setTimeout(() => {
-      this.persistSync(this.data);
+      const snapshot = JSON.parse(JSON.stringify(this.data)) as DatabaseSchema;
+      this.persistToSupabase(snapshot).catch((error) => {
+        console.error('[OmniPost] Failed to persist to Supabase:', error);
+      });
     }, 150);
   }
 
@@ -530,14 +579,14 @@ class DatabaseManager {
   }
 
   public authenticate(email: string, password?: string): { user?: User; error?: string } {
-    const user = this.getUserByEmail(email);
+    const user = this.getUserByEmail(email) as (User & { password_hash?: string }) | undefined;
     if (!user) {
       return { error: 'Account not found with this email address' };
     }
-    if (password && user.password && user.password !== password) {
+    if (password && ((user.password && !verifyPassword(password, user.password)) || (user.password_hash && !verifyPassword(password, user.password_hash)))) {
       return { error: 'Invalid password. Please check your credentials.' };
     }
-    const { password: _, ...cleanUser } = user;
+    const { password: _, password_hash: __, ...cleanUser } = user as any;
     return { user: cleanUser as User };
   }
 
@@ -552,12 +601,12 @@ class DatabaseManager {
       email: normalizedEmail,
       name: name.trim(),
       role: assignedRole,
-      password,
+      password: hashPassword(password),
       created_at: new Date().toISOString(),
     };
     this.data.users.push(newUser);
     this.save();
-    const { password: _, ...clean } = newUser;
+    const { password: _, password_hash: __, ...clean } = newUser as any;
     return { user: clean as User };
   }
 
