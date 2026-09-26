@@ -505,24 +505,14 @@ export class OAuthService {
     return { success: true, accountId: result.account?.id };
   }
 
-  // Token refresh routine (auto-renews tokens expiring within 24h)
+  // Refresh only after calling the connected provider's real token endpoint.
   public async refreshAccountToken(accountId: string): Promise<{ success: boolean; error?: string }> {
     const account = db.getRawAccount(accountId);
     if (!account) return { success: false, error: 'Account not found' };
-
-    try {
-      // Simulate/perform token refresh
-      const newExpiresAt = new Date(Date.now() + 60 * 86400000).toISOString();
-      db.updateAccountTokens(accountId, {
-        token_expires_at: newExpiresAt,
-        status: 'active',
-        access_token_enc: `renewed_token_${account.platform}_${crypto.randomBytes(16).toString('hex')}`,
-      });
-      return { success: true };
-    } catch (err: any) {
-      db.updateAccountTokens(accountId, { status: 'expired' });
-      return { success: false, error: err.message || 'Token renewal failed' };
-    }
+    return {
+      success: false,
+      error: `Automatic token refresh is not configured for ${account.platform}. Reconnect through provider OAuth.`,
+    };
   }
 }
 
