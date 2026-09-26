@@ -774,7 +774,7 @@ class DatabaseManager {
     return { user: cleanUser as User };
   }
 
-  public async registerUser(name: string, email: string, password: string = 'user123', _role?: 'admin' | 'user'): Promise<{ user?: User; error?: string }> {
+  public async registerUser(name: string, email: string, password: string, _role?: 'admin' | 'user'): Promise<{ user?: User; error?: string }> {
     const normalizedEmail = email.trim().toLowerCase();
     if (this.getUserByEmail(normalizedEmail)) {
       return { error: 'An account with this email already exists' };
