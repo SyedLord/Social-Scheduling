@@ -170,27 +170,6 @@ export class SchedulingEngine {
         error_details: undefined,
       });
 
-      // Seed baseline initial analytics for published post
-      const impressions = Math.floor(Math.random() * 2500) + 500;
-      const reach = Math.floor(impressions * 0.78);
-      const engagements = Math.floor(reach * 0.08);
-      const likes = Math.floor(engagements * 0.65);
-      const retweets_shares = Math.floor(engagements * 0.2);
-      const comments = Math.floor(engagements * 0.1);
-      const clicks = Math.floor(engagements * 0.05);
-
-      db['data'].post_analytics.push({
-        id: `ana_${crypto.randomBytes(4).toString('hex')}`,
-        post_id: post.id,
-        impressions,
-        reach,
-        engagements,
-        likes,
-        retweets_shares,
-        comments,
-        clicks,
-        updated_at: new Date().toISOString(),
-      });
       db.save();
 
       return { post: updated.post || post, results: publishResults };
@@ -280,18 +259,15 @@ export class SchedulingEngine {
       }
     }
 
-    // 4. Rate-limit simulation & delay
-    await new Promise((resolve) => setTimeout(resolve, 300 + Math.floor(Math.random() * 300)));
-
-    // Generate verified platform post ID
-    const platformPostId = `${platform}_${Date.now()}_${crypto.randomBytes(4).toString('hex')}`;
-
+    // Never report a post as published until a real platform API confirms it.
     return {
       platform,
       accountId: account.id,
-      success: true,
-      platformPostId,
-      executionTimeMs: 350,
+      success: false,
+      errorCode: 'PUBLISHER_NOT_CONFIGURED',
+      errorMessage: `Publishing to ${config.name} is unavailable because a verified platform publishing adapter is not configured.`,
+      actionableRemedy: 'Connect an approved platform app and configure its publishing integration before scheduling live posts.',
+      executionTimeMs: 0,
     };
   }
 }
